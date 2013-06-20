@@ -79,7 +79,8 @@ int app_terminate(void *user_data);
 int app_pause(void *user_data);
 int app_resume(void *user_data);
 int app_reset(bundle *b, void *user_data);
-int app_rotation(enum appcore_rm, void *user_data);
+/*mode is actually an enum defined in appcore [enum appcore_rm]*/
+int app_rotation(int mode, void *user_data);
 
 int _ri_cmdline_destroy(ri_frontend_data *data);
 int _ri_cmdline_process(ri_frontend_data *data);

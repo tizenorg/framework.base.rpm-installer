@@ -68,13 +68,13 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 
 ####################################################################################################
 ## for rpm-backend (binary)
-SET(rpm-backend_SOURCES ${backend_c_src_dir}/core/rpm-installer-core.c ${backend_c_src_dir}/core/rpm-installer-tool.c ${backend_c_src_dir}/rpm/rpm-installer.c ${backend_c_src_dir}/vconf/rpm-vconf-intf.c ${frontend_c_src_dir}/rpm-appcore-intf.c  ${frontend_c_src_dir}/rpm-cmdline.c  ${frontend_c_ui_src_dir}/rpm-homeview.c)
+SET(rpm-backend_SOURCES ${backend_c_src_dir}/core/rpm-installer-core.c ${backend_c_src_dir}/core/rpm-installer-tool.c ${backend_c_src_dir}/rpm/rpm-installer.c ${backend_c_src_dir}/rpm/rpm-installer-privilege.c ${backend_c_src_dir}/vconf/rpm-vconf-intf.c ${frontend_c_src_dir}/rpm-appcore-intf.c  ${frontend_c_src_dir}/rpm-cmdline.c  ${frontend_c_ui_src_dir}/rpm-homeview.c)
 
 SET(rpm-backend_CFLAGS " -I. -I/usr/include/rpm -I${backend_inc_dir} -I${frontend_inc_dir} -I${frontend_c_ui_inc_dir} ${pkg_CFLAGS}")
 SET(rpm-backend_LDFLAGS ${pkgs_LDFLAGS})
 
 ADD_EXECUTABLE(rpm-backend ${rpm-backend_SOURCES})
-TARGET_LINK_LIBRARIES(rpm-backend rpm-util "rpm" "rpmio")
+TARGET_LINK_LIBRARIES(rpm-backend rpm-util "rpm" "rpmio" "dl")
 TARGET_LINK_LIBRARIES(rpm-backend ${libpkgs_LDFLAGS})
 TARGET_LINK_LIBRARIES(rpm-backend ${COMMCLIENT_LIBRARIES})
 TARGET_LINK_LIBRARIES(rpm-backend ${APPCODEEFL_LIBRARIES})

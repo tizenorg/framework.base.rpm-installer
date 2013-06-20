@@ -42,7 +42,7 @@
 #define VCONF_RPM_INSTALLER_LAST_REQUESTINFO_OPTIONS \
 	VCONF_RPM_INSTALLER"/requestinfo/options"
 
-#define ERR_RETURN_LEN 32
+#define ERR_RETURN_LEN			10
 
 extern pkgmgr_installer *pi;
 extern char *gpkgname;

@@ -36,6 +36,7 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <rpmlib.h>
 #include <header.h>
 #include <rpmts.h>
@@ -49,15 +50,9 @@
 #define QUERY_PACKAGE		"/usr/bin/query_rpm_package.sh"
 #define RPM_PKG_INFO		"/var/rpmpkg.info"
 
-struct pkgfile_info_t {
-	char *pkg_filename;
-	char *pkg_type;
-};
-typedef struct pkgfile_info_t pkgfile_info;
 
 extern char *gpkgname;
 extern int do_upgrade;
-static int __ri_xsystem_with_dup(char *pkgid, int fd);
 static int __ri_recursive_delete_dir(char *dirname);
 
 static int __ri_recursive_delete_dir(char *dirname)
@@ -68,7 +63,7 @@ static int __ri_recursive_delete_dir(char *dirname)
 	struct stat stFileInfo;
 	dp = opendir(dirname);
 	if (dp != NULL) {
-		while (ep = readdir(dp)) {
+		while ((ep = readdir(dp))) {
 			snprintf(abs_filename, FILENAME_MAX, "%s/%s", dirname,
 				 ep->d_name);
 			if (lstat(abs_filename, &stFileInfo) < 0)
@@ -86,7 +81,10 @@ static int __ri_recursive_delete_dir(char *dirname)
 		(void)closedir(dp);
 	} else {
 		_d_msg(DEBUG_ERR, "Couldn't open the directory\n");
-		return RPM_INSTALLER_ERR_CLEAR_DATA_FAILED;
+		if (errno == ENOENT)
+			return RPM_INSTALLER_SUCCESS;
+		else
+			return RPM_INSTALLER_ERR_CLEAR_DATA_FAILED;
 	}
 
 	return RPM_INSTALLER_SUCCESS;
@@ -94,8 +92,6 @@ static int __ri_recursive_delete_dir(char *dirname)
 
 pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 {
-	int i;
-	int ret = 0;
 	rpmts ts;
 	rpmtd td;
 	FD_t fd;
@@ -166,7 +162,6 @@ pkginfo *_rpm_installer_get_pkgname_info(char *pkgid)
 	int found = 0;
 	rpmdbMatchIterator mi;
 	rpmtd tn, tv;
-	rpmRC rc;
 	pkginfo *info = NULL;
 	if (pkgid == NULL)
 		return NULL;
@@ -180,19 +175,11 @@ pkginfo *_rpm_installer_get_pkgname_info(char *pkgid)
 	tv = rpmtdNew();
 	ts = rpmtsCreate();
 
-	mi = rpmtsInitIterator(ts, RPMDBI_PACKAGES, NULL, 0);
+	mi = rpmtsInitIterator(ts, RPMTAG_NAME, pkgid, 0);
 	while (NULL != (hdr = rpmdbNextIterator(mi))) {
-
 		hdr = headerLink(hdr);
-		rc = headerGet(hdr, RPMTAG_NAME, tn, HEADERGET_MINMEM);
-		if (strcmp(pkgid, rpmtdGetString(tn)) == 0) {
-			found = 1;
-			break;
-		} else {
-			rpmtdReset(tn);
-			headerFree(hdr);
-		}
-
+		found = 1;
+		break;
 	}
 
 	if (found == 0) {
@@ -211,7 +198,6 @@ pkginfo *_rpm_installer_get_pkgname_info(char *pkgid)
 	strncpy(info->version, rpmtdGetString(tv), sizeof(info->version)-1);
 	_d_msg(DEBUG_INFO, "Version : %s\n", info->version);
 
-
  err:
 	headerFree(hdr);
 	rpmtdFreeData(tn);
@@ -220,149 +206,8 @@ pkginfo *_rpm_installer_get_pkgname_info(char *pkgid)
 	rpmtdFree(tv);
 	rpmdbFreeIterator(mi);
 	rpmtsFree(ts);
-
 	return info;
-
 }
-
-#if 0
-
-static int __ri_xsystem_with_dup(char *pkgname, int fd)
-{
-	int pid;
-	int status = 0;
-	const char *argv[] = { QUERY_PACKAGE, pkgname, NULL };
-	pid = fork();
-	switch (pid) {
-	case -1:
-		perror("fork failed");
-		return -1;
-	case 0:		/* child */
-		close(1);
-		close(2);
-		dup(fd);
-		dup(fd);	/* dup called twice to create copy of fd 1 and fd 2 */
-		execvp(argv[0], (char *const *)argv);
-		exit(-1);
-	default:		/*parent */
-		break;
-	}
-	if (waitpid(pid, &status, 0) == -1) {
-		perror("waitpid failed");
-		return -1;
-	}
-	if (WIFSIGNALED(status)) {
-		perror("signal");
-		printf("sig no. %d\n", WTERMSIG(status));
-		return -1;
-	}
-	if (!WIFEXITED(status)) {
-		perror("should not happen");
-		return -1;
-	}
-
-	return WEXITSTATUS(status);
-}
-
-pkginfo *_rpm_installer_get_pkg_info(char *pkgname)
-{
-	pkginfo *info = NULL;
-	int err = 0;
-	int fd = -1;
-	FILE *fp = NULL;
-	char *line = NULL;
-	size_t len = 0;
-	ssize_t read;
-	char *saveptr = NULL;
-	char *tok = NULL;
-
-	if (pkgname == NULL)
-		return NULL;
-
-	fd = open(RPM_PKG_INFO, O_CREAT | O_RDWR, 0644);
-	if (fd == -1) {
-		_d_msg(DEBUG_ERR, "open failed\n");
-		return NULL;
-	}
-
-	err = __ri_xsystem_with_dup(pkgname, fd);
-	_d_msg(DEBUG_INFO,
-	       "[_rpm_installer_get_pkg_info] _xsystem returns %d\n", err);
-	if (err == 1) {
-		_d_msg(DEBUG_INFO,
-		       "[_rpm_installer_get_pkg_info] "
-		       "Package Not installed \n");
-		close(fd);
-		return NULL;
-	} else if (err == 2) {
-		_d_msg(DEBUG_INFO,
-		       "[_rpm_installer_get_pkg_info] "
-		       "package already install\n");
-		info = malloc(sizeof(pkginfo));
-		if (info == NULL) {
-			_d_msg(DEBUG_ERR, "Malloc Failed\n");
-			close(fd);
-			return NULL;
-		}
-		memset(info, 0x00, sizeof(pkginfo));
-		close(fd);
-		fp = fopen(RPM_PKG_INFO, "r");
-		if (fp == NULL) {
-			_d_msg(DEBUG_ERR, "fopen failed\n");
-			return NULL;
-		}
-
-		/* Now open file and get pkgname and version */
-		while ((read = getline(&line, &len, fp)) != -1) {
-			int len = strlen(line);
-			line[len - 1] = '\0';
-
-			_d_msg(DEBUG_INFO, "line[%s]\n", line);
-
-			tok = strtok_r(line, " ", &saveptr);	/*Name */
-			if (tok && strncmp(tok, "Name", 4) == 0) {
-				/* : */
-				tok = strtok_r(NULL, " ", &saveptr);
-				/* <name> */
-				tok = strtok_r(NULL, " ", &saveptr);
-				if (tok) {
-					strncpy(info->package_name, tok,
-						sizeof(info->package_name));
-				}
-			} else if (tok && strncmp(tok, "Version", 7) == 0) {
-				/* : */
-				tok = strtok_r(NULL, " ", &saveptr);
-				/* <version> */
-				tok = strtok_r(NULL, " ", &saveptr);
-				if (tok) {
-					strncpy(info->version, tok,
-						sizeof(info->version));
-				}
-				break;
-			} else
-				continue;
-		}
-		if (line) {
-			free(line);
-			line = NULL;
-		}
-		fclose(fp);
-		remove(RPM_PKG_INFO);
-		return info;
-
-	} else {
-		_d_msg(DEBUG_ERR,
-		       "[_rpm_installer_get_pkg_info] "
-		       "_xsystem returns error = %d\n", err);
-		close(fd);
-		return NULL;
-	}
-	remove(RPM_PKG_INFO);
-	return info;
-
-}
-
-#endif
 
 int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 				   char *installoptions)
@@ -380,7 +225,7 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 	info = _rpm_installer_get_pkgfile_info(pkgfilepath);
 	if (info == NULL) {
 		/* failed to get pkg info */
-		return RPM_INSTALLER_ERR_UNKNOWN;
+		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 
 	_ri_set_backend_state_info(GOT_PACKAGE_INFO_SUCCESSFULLY);

@@ -294,49 +294,15 @@ void _ri_stat_cb(const char *pkgid, const char *key, const char *val)
 
 int _ri_cmdline_process(ri_frontend_data *data)
 {
-	char *cookie = NULL;
-	int cookie_size = 0;
-	int cookie_ret = 0;
-
 	int ret = 0;
 	ri_frontend_cmdline_arg *fdata = data->args;
-
-	cookie_size = security_server_get_cookie_size();
-	/* If security server is down or some other
-	   error occured, raise failure */
-	if (0 >= cookie_size) {
-		/* TODO: raise error */
-		_d_msg(DEBUG_ERR,
-		       "security_server_get_cookie_size: Security server down \n");
-	} else {
-		cookie = calloc(cookie_size, sizeof(char));
-		cookie_ret =
-		    security_server_request_cookie(cookie, cookie_size);
-		/* TODO: Check cookie_ret...
-		   (See security-server.h to check return code) */
-	}
-
-	if (cookie != NULL)
-		_d_msg(DEBUG_INFO, "Got Cookie with size = %d\n", cookie_size);
-
-	data->security_cookie = cookie;
-
+	/*rpm-installer is invoked by pkgmgr-server hence server should do cookie validation*/
 	ret = __ri_process_request(fdata);
 	if (ret != RPM_INSTALLER_SUCCESS) {
 		_d_msg(DEBUG_ERR, "__ri_process_request: Error\n");
-		goto RETURN;
+		return ret;
 	}
-
 	return RPM_INSTALLER_SUCCESS;
-
- RETURN:
-
-	if (data->security_cookie) {
-		free(data->security_cookie);
-		data->security_cookie = NULL;
-	}
-
-	return ret;
 }
 
 int _ri_cmdline_destroy(ri_frontend_data *data)

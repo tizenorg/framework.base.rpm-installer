@@ -214,6 +214,7 @@ int pkg_plugin_get_app_detail_info_from_package(const char *pkg_path,
 
 API int pkg_plugin_on_load(pkg_plugin_set *set)
 {
+	_librpm_print(DEBUG_ERR, "pkg_plugin_on_load() is called\n");
 	static int initialized = 0;
 	rpmRC rc;
 	if (set == NULL) {
@@ -223,8 +224,10 @@ API int pkg_plugin_on_load(pkg_plugin_set *set)
 	memset(set, 0x00, sizeof(pkg_plugin_set));
 	if (!initialized) {
 		rc = rpmReadConfigFiles(NULL, NULL);
-		if (rc == RPMRC_OK)
+		if (rc == RPMRC_OK) {
 			initialized = 1;
+			_librpm_print(DEBUG_ERR, "Successfully read RPM configuration.\n");
+		}
 		else {
 			_librpm_print(DEBUG_ERR, "Unable to read RPM configuration.\n");
 			initialized = 0;

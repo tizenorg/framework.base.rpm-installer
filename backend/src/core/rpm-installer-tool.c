@@ -200,7 +200,6 @@ static int __ri_native_recovery(int lastbackstate)
 	int lreq;
 	int opt;
 	int err = 0;
-	char *installoptions = NULL;
 
 	_d_msg(DEBUG_INFO, "Rpm Installer Recovery Entry \n");
 
@@ -302,6 +301,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		if (data.cmd_string == NULL) {
 			_d_msg(DEBUG_ERR,
 			       "strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
 	} else if (strncmp(reqcommand, "remove", strlen("remove")) == 0) {
 		data.req_cmd = DELETE_CMD;
@@ -309,6 +309,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		if (data.cmd_string == NULL) {
 			_d_msg(DEBUG_ERR,
 			       "strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
 	} else if (strncmp(reqcommand, "recover", strlen("recover")) == 0) {
 		data.req_cmd = RECOVER_CMD;
@@ -316,6 +317,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		if (data.cmd_string == NULL) {
 			_d_msg(DEBUG_ERR,
 			       "strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
 	} else if (strncmp(reqcommand, "cleardata", strlen("cleardata")) == 0) {
 		data.req_cmd = CLEARDATA_CMD;
@@ -323,6 +325,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		if (data.cmd_string == NULL) {
 			_d_msg(DEBUG_ERR,
 			       "strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
 	} else if (strncmp(reqcommand, "move", strlen("move")) == 0) {
 		data.req_cmd = MOVE_CMD;
@@ -330,6 +333,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		if (data.cmd_string == NULL) {
 			_d_msg(DEBUG_ERR,
 			       "strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
 	} else {
 		_d_msg(DEBUG_INFO, "wrong input parameter\n");
@@ -345,6 +349,10 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		_d_msg(DEBUG_INFO, "Successfully read rpm configuration\n");
 	} else {
 		_d_msg(DEBUG_ERR, "Unable to read RPM configuration.\n");
+		if (data.cmd_string) {
+			free(data.cmd_string);
+			data.cmd_string = NULL;
+		}
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 
@@ -380,6 +388,10 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 				 "No Recovery Needed");
 		}
 		_d_msg(DEBUG_RESULT, "%d\n", ret);
+		if (data.cmd_string) {
+			free(data.cmd_string);
+			data.cmd_string = NULL;
+		}
 		return ret;
 
 	}
@@ -416,6 +428,10 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 			       "Request Failed as "
 			       "Another Instance is running \n");
 			ret = RPM_INSTALLER_ERR_RESOURCE_BUSY;
+			if (data.cmd_string) {
+				free(data.cmd_string);
+				data.cmd_string = NULL;
+			}
 			return ret;
 		} else {
 			int lastbackstate;

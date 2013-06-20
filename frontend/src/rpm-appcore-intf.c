@@ -35,7 +35,6 @@
 #include <pkgmgr_installer.h>
 
 static void __ri_start_processing(void *user_data);
-static Eina_Bool __ri_elm_exit_cb(void *data);
 
 int ret_val = -1;
 struct appdata ad;
@@ -49,7 +48,6 @@ int app_create(void *user_data)
 
 	int ret = 0;
 	struct appdata *data = (struct appdata *)user_data;
-	ri_frontend_cmdline_arg *fdata = front_data.args;
 	/*In case of downgrade, popup should be shown even if quiet mode*/
 	ret = _ri_frontend_launch_main_view(data);
 	return ret;
@@ -85,7 +83,7 @@ int app_reset(bundle *b, void *user_data)
 }
 
 /**< Called at rotate device*/
-int app_rotation(enum appcore_rm mode, void *user_data)
+int app_rotation(int mode, void *user_data)
 {
 	if (user_data == NULL) {
 		_d_msg(DEBUG_ERR, "arg supplied is NULL \n");
@@ -120,8 +118,7 @@ Eina_Bool show_popup_cb(void *data)
 {
 	/*Avoid log printing as it is an idler function*/
 	int state = -1;
-	int ret = -1;
-	const char message[256] = {'\0'};
+	char message[256] = {'\0'};
 	state = _ri_get_backend_state_info();
 	switch (state) {
 	case REQUEST_ACCEPTED:
@@ -153,7 +150,7 @@ static void __ri_start_processing(void *user_data)
 	int ret = 0;
 	if (user_data == NULL) {
 		_d_msg(DEBUG_ERR, "arg supplied is NULL \n");
-		return -1;
+		return;
 	}
 	ri_frontend_data *data = (ri_frontend_data *) user_data;
 	g_type_init();

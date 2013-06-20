@@ -100,6 +100,18 @@ extern "C" {
 	int _rpm_installer_clear_private_data(char *pkgid);
 	int _rpm_move_pkg(char *pkgid, int move_type);
 
+/* libprivilege-control specific operations prototype*/
+	int _ri_privilege_register_package(const char *pkgid);
+	int _ri_privilege_unregister_package(const char *pkgid);
+	int _ri_privilege_revoke_permissions(const char *pkgid);
+	int _ri_privilege_enable_permissions(const char *pkgid, int apptype,
+						const char **perms, int persistent);
+	int _ri_privilege_setup_path(const char *pkgid, const char *dirpath,
+						int apppathtype, const char *groupid);
+	int _ri_privilege_add_friend(const char *pkgid1, const char *pkgid2);
+	int _ri_privilege_change_smack_label(const char *path, const char *label,
+						int label_type);
+
 #ifdef __cplusplus
 }
 #endif				/* __cplusplus */

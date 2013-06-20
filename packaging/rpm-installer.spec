@@ -1,7 +1,7 @@
 Name:       rpm-installer
 Summary:    Native rpm installer
-Version:    0.1.25
-Release:    2
+Version:    0.1.31
+Release:    1
 Group:      System/Libraries
 License:    Apache License, Version 2.0
 Source0:    %{name}-%{version}.tar.gz
@@ -57,11 +57,11 @@ ln -sf /usr/lib/libnativerpm.so /usr/etc/package-manager/backendlib/librpm.so
 
 chmod 700 /usr/bin/rpm-backend
 
-vconftool set -t int db/private/rpm-installer/state "0"
-vconftool set -t int db/private/rpm-installer/stateinfo "0"
-vconftool set -t int db/private/rpm-installer/requestinfo/command "0"
-vconftool set -t string db/private/rpm-installer/requestinfo/pkgname ""
-vconftool set -t int db/private/rpm-installer/requestinfo/options "0"
+vconftool set -t int db/private/rpm-installer/state "0" -f
+vconftool set -t int db/private/rpm-installer/stateinfo "0" -f
+vconftool set -t int db/private/rpm-installer/requestinfo/command "0" -f
+vconftool set -t string db/private/rpm-installer/requestinfo/pkgname "" -f
+vconftool set -t int db/private/rpm-installer/requestinfo/options "0" -f
 
 %files
 %manifest rpm-installer.manifest

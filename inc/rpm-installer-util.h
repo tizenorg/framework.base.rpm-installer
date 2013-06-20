@@ -40,26 +40,27 @@ extern "C" {
 
 #define PKGTYPE "rpm"
 
-#define RPM_INSTALLER_SUCCESS						0
-#define RPM_INSTALLER_ERR_WRONG_PARAM				101
+/*Error number according to Tizen Native Package Manager Command Specification v1.0*/
+#define RPM_INSTALLER_SUCCESS					0
+#define RPM_INSTALLER_ERR_WRONG_PARAM				64
 #define RPM_INSTALLER_ERR_DBUS_PROBLEM				102
-#define RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY			62
-#define RPM_INSTALLER_ERR_PACKAGE_EXIST				103
-#define RPM_INSTALLER_ERR_PACKAGE_NOT_INSTALLED		104
+#define RPM_INSTALLER_ERR_PACKAGE_EXIST				121
+#define RPM_INSTALLER_ERR_PACKAGE_NOT_INSTALLED			104
 #define RPM_INSTALLER_ERR_RESOURCE_BUSY				105
-#define RPM_INSTALLER_ERR_UNKNOWN					120
-#define RPM_INSTALLER_ERR_PKG_NOT_FOUND				1
-#define RPM_INSTALLER_ERR_NOT_SUPPOTED_VERSION		107
-#define RPM_INSTALLER_ERR_NO_RPM_FILE				108
+#define RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY			63
+#define RPM_INSTALLER_ERR_NOT_SUPPOTED_VERSION			107
+#define RPM_INSTALLER_ERR_NO_RPM_FILE				2
 #define RPM_INSTALLER_ERR_DB_ACCESS_FAILED			109
-#define RPM_INSTALLER_ERR_RPM_OPERATION_FAILED		110
-#define RPM_INSTALLER_ERR_PACKAGE_NOT_UPGRADED		111
-#define RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS		112
-#define RPM_INSTALLER_ERR_NEED_USER_CONFIRMATION	113
+#define RPM_INSTALLER_ERR_RPM_OPERATION_FAILED			110
+#define RPM_INSTALLER_ERR_PACKAGE_NOT_UPGRADED			111
+#define RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS			112
+#define RPM_INSTALLER_ERR_NEED_USER_CONFIRMATION		113
 #define RPM_INSTALLER_ERR_PACKAGE_INSTALLATION_DISABLED		114
 #define RPM_INSTALLER_ERR_PACKAGE_UNINSTALLATION_DISABLED	115
 #define RPM_INSTALLER_ERR_CLEAR_DATA_FAILED			116
-#define RPM_INSTALLER_ERR_INTERNAL					117
+#define RPM_INSTALLER_ERR_INTERNAL				117
+#define RPM_INSTALLER_ERR_PKG_NOT_FOUND				1
+#define RPM_INSTALLER_ERR_UNKNOWN				119
 #define RPM_INSTALLER_ERR_NO_MANIFEST				11
 #define RPM_INSTALLER_ERR_INVALID_MANIFEST			12
 
@@ -85,7 +86,6 @@ extern "C" {
 #define RPM_INSTALLER_ERR_NO_MANIFEST_STR	"Manifest File Not Found"
 #define RPM_INSTALLER_ERR_INVALID_MANIFEST_STR	"Manifest Validation Failed"
 
-
 #define DEBUG_ERR		0x0001
 #define DEBUG_INFO		0x0002
 #define DEBUG_RESULT	0x0004
@@ -100,10 +100,6 @@ __LINE__, __func__, ##args); \
 
 	void _d_msg_init(char *program);
 	void _d_msg_deinit();
-	int _ri_xsystem(const char *argv[]);
-	char *_ri_substring(const char *str, size_t begin, size_t len);
-	int _ri_tok_split_string(char tok, char *input, char **list,
-				 unsigned long listmax);
 	void _ri_error_no_to_string(int errnumber, char **errstr);
 	int _ri_string_to_error_no(char *errstr);
 

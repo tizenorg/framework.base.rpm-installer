@@ -39,56 +39,16 @@
 
 #include <dlog.h>
 
+#ifdef LOG_TAG
+#undef LOG_TAG
 #define LOG_TAG				"rpminstaller"
+#endif
 
 int logging = 0x0004;
 #ifdef LOG_IN_FILE
 #define RPM_INSTALLER_LOG_FILE "/tmp/rpm-installer"
 FILE *logfile = NULL;
 #endif
-
-/**
- * This is intended to be a faster splitter, it does not use dynamic
- *  memories. Input is changed to insert nulls at each token location.
- */
-int _ri_tok_split_string(char tok, char *input, char **list,
-			 unsigned long listmax)
-{
-	/* Strip any leading spaces */
-	char *start = input;
-	char *stop = start + strlen(start);
-	for (; *start != 0 && isspace(*start) != 0; start++) ;
-
-	unsigned long count = 0;
-	char *pos = start;
-	while (pos != stop) {
-		/* Skip to the next Token */
-		for (; pos != stop && *pos != tok; pos++) ;
-
-		/* Back remove spaces */
-		char *end = pos;
-		for (;
-		     end > start && (end[-1] == tok || isspace(end[-1]) != 0);
-		     end--) ;
-
-		*end = 0;
-
-		list[count++] = start;
-		if (count >= listmax) {
-			list[count - 1] = 0;
-			return -1;
-		}
-		/* Advance pos */
-		for (;
-		     pos != stop && (*pos == tok || isspace(*pos) != 0
-				     || *pos == 0); pos++) ;
-
-		start = pos;
-	}
-
-	list[count] = 0;
-	return 0;
-}
 
 void _d_msg_init(char *program)
 {
@@ -127,21 +87,20 @@ void _print_msg(int type, int exetype, char *format, ...)
 {
 	char buffer[1024] = { 0 };
 	char tbuffer[1024] = { 0 };
-	int nbuffer = 0;
 	va_list args;
 	va_start(args, format);
-	nbuffer = vsnprintf(tbuffer, 1024, format, args);
+	vsnprintf(tbuffer, 1024, format, args);
 	va_end(args);
 
 	switch (type) {
 	case DEBUG_ERR:
-		LOG(LOG_ERROR, LOG_TAG, tbuffer);
+		LOG(LOG_ERROR, LOG_TAG, "%s", tbuffer);
 		break;
 	case DEBUG_RESULT:
-		LOG(LOG_WARN, LOG_TAG, tbuffer);
+		LOG(LOG_WARN, LOG_TAG, "%s", tbuffer);
 		break;
 	case DEBUG_INFO:
-		LOG(LOG_DEBUG, LOG_TAG, tbuffer);
+		LOG(LOG_DEBUG, LOG_TAG, "%s", tbuffer);
 	default:
 		break;
 	}
@@ -150,13 +109,13 @@ void _print_msg(int type, int exetype, char *format, ...)
 		return;
 
 	if (DEBUG_ERR == (logging & type)) {
-		nbuffer = snprintf(buffer, 1024, "ERROR:%s", tbuffer);
+		snprintf(buffer, 1024, "ERROR:%s", tbuffer);
 		vfprintf(stderr, format, args);
 	} else if (DEBUG_INFO == (logging & type)) {
-		nbuffer = snprintf(buffer, 1024, "INFO:%s", tbuffer);
+		snprintf(buffer, 1024, "INFO:%s", tbuffer);
 		vfprintf(stdout, format, args);
 	} else if (DEBUG_RESULT == (logging & type)) {
-		nbuffer = snprintf(buffer, 1024, "RESULT:%s", tbuffer);
+		snprintf(buffer, 1024, "RESULT:%s", tbuffer);
 		vfprintf(stdout, format, args);
 	} else {
 		return;
@@ -166,59 +125,6 @@ void _print_msg(int type, int exetype, char *format, ...)
 	if (logfile != NULL)
 		fwrite(buffer, sizeof(char), strlen(buffer), logfile);
 #endif				/*LOG_IN_FILE */
-}
-
-/* Like system(3), but with error messages printed if the fork fails
-   or if the child process dies due to an uncaught signal. Also, the
-   return value is a bit simpler:
-
-   -1 if there was any problem
-   Otherwise, the 8-bit return value of the program ala WEXITSTATUS
-   as defined in <sys/wait.h>.
-   */
-int _ri_xsystem(const char *argv[])
-{
-	int status;
-	pid_t pid;
-	pid = vfork();
-	switch (pid) {
-	case -1:
-		perror("fork failed");
-		return -1;
-	case 0:
-		/* child */
-		execvp(argv[0], (char *const *)argv);
-		_exit(-1);
-	default:
-		/* parent */
-		break;
-	}
-
-	_d_msg(DEBUG_INFO, "parent\n");
-	if (waitpid(pid, &status, 0) == -1) {
-		perror("waitpid failed");
-		return -1;
-	}
-
-	if (WIFSIGNALED(status)) {
-		perror("signal");
-		return -1;
-	}
-
-	if (!WIFEXITED(status)) {
-		/* shouldn't happen */
-		perror("should not happen");
-		return -1;
-	}
-
-	return WEXITSTATUS(status);
-}
-
-char *_ri_substring(const char *str, size_t begin, size_t len)
-{
-	if (str == 0 || strlen(str) == 0 || strlen(str) < (begin + len))
-		return 0;
-	return strndup(str + begin, len);
 }
 
 void _ri_error_no_to_string(int errnumber, char **errstr)
@@ -349,6 +255,5 @@ int _ri_string_to_error_no(char *errstr)
 	else if (strcmp(errstr, RPM_INSTALLER_ERR_INVALID_MANIFEST_STR) == 0)
 		errnumber = RPM_INSTALLER_ERR_INVALID_MANIFEST;
 	else
-		_d_msg(DEBUG_ERR, "Unsupported Error\n");
-	return errnumber;
+		return errnumber;
 }
