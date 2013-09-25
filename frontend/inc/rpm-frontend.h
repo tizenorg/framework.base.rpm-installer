@@ -47,6 +47,8 @@ enum command {
 	RECOVER_CMD = 4,
 	CLEARDATA_CMD = 5,
 	MOVE_CMD = 6,
+	SMACK_CMD = 7,
+	RPM_CMD_MAX = 8,
 };
 
 struct ri_frontend_cmdline_arg_t {

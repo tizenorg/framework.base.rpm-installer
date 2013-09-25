@@ -1,6 +1,6 @@
 Name:       rpm-installer
 Summary:    Native rpm installer
-Version:    0.1.31
+Version:    0.1.37
 Release:    1
 Group:      System/Libraries
 License:    Apache License, Version 2.0
@@ -27,6 +27,9 @@ BuildRequires:  pkgconfig(libxml-2.0)
 BuildRequires:  pkgconfig(security-server)
 BuildRequires:  pkgconfig(elementary)
 BuildRequires:  pkgconfig(appcore-efl)
+BuildRequires:  pkgconfig(cert-svc)
+BuildRequires:  pkgconfig(xmlsec1)
+BuildRequires:  pkgconfig(libxslt)
 BuildRequires:  pkgconfig(evas)
 BuildRequires:  pkgconfig(ecore)
 BuildRequires:  pkgconfig(edje)
@@ -41,6 +44,13 @@ Native rpm installer
 
 %build
 CFLAGS+=" -fpic"
+
+%if 0%{?tizen_build_binary_release_type_eng}
+export CFLAGS="$CFLAGS -DTIZEN_ENGINEER_MODE"
+export CXXFLAGS="$CXXFLAGS ?DTIZEN_ENGINEER_MODE"
+export FFLAGS="$FFLAGS -DTIZEN_ENGINEER_MODE"
+%endif
+
 cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix}
 
 make %{?jobs:-j%jobs}
@@ -70,6 +80,7 @@ vconftool set -t int db/private/rpm-installer/requestinfo/options "0" -f
 %attr(0755,-,-) /usr/bin/query_rpm_package.sh
 %attr(0700,-,-) /usr/bin/uninstall_rpm_package.sh
 %attr(0700,-,-) /usr/bin/upgrade_rpm_package.sh
+%attr(0744,-,-) /usr/etc/rpm-installer-config.ini
 %attr(0644,-,-) /usr/share/locale/en_GB/LC_MESSAGES/rpm-installer.mo
 %attr(0644,-,-) /usr/share/locale/ja_JP/LC_MESSAGES/rpm-installer.mo
 %attr(0644,-,-) /usr/share/locale/zh_CN/LC_MESSAGES/rpm-installer.mo

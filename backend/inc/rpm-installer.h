@@ -59,6 +59,11 @@ extern "C" {
 					   char *install_options);
 
 /**
+ * Install the package manifest
+ * @in :pkgfilepath : Package manifest file path
+ */
+	int _rpm_installer_corexml_install(char *pkgfilepath);
+/**
  * get the package information from package name
  * return the package information
  * @in :pkgid : package id for which information is requested
@@ -88,6 +93,7 @@ extern "C" {
 	int _rpm_uninstall_pkg(char *pkgid);
 	int _rpm_install_pkg(char *pkgfilepath, char *installoptions);
 	int _rpm_upgrade_pkg(char *pkgfilepath, char *installoptions);
+	int _rpm_install_corexml(char *pkgfilepath, char *pkgid);
 	int _ri_set_backend_state(int state);
 	int _ri_get_backend_state();
 	int _ri_get_backend_state_info();
@@ -111,6 +117,11 @@ extern "C" {
 	int _ri_privilege_add_friend(const char *pkgid1, const char *pkgid2);
 	int _ri_privilege_change_smack_label(const char *path, const char *label,
 						int label_type);
+	int _ri_verify_sig_and_cert(const char *sigfile);
+	void _ri_unregister_cert(const char *pkgid);
+	void _ri_register_cert(const char *pkgid);
+	void _ri_apply_smack(char *pkgname, int flag);
+
 
 #ifdef __cplusplus
 }

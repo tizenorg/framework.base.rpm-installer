@@ -70,6 +70,8 @@ static void __ri_show_usage(char **arg)
 	       "\t -d <package name>		: delete a package with package name \n");
 	_d_msg(DEBUG_INFO,
 	       "\t -q : (quiet) run in background without any user interaction \n");
+	_d_msg(DEBUG_INFO,
+	       "\t -s : (smack) apply smack rule and set smack label\n");
 }
 
 int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data)
@@ -108,6 +110,9 @@ int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data)
 	case PKGMGR_REQ_MOVE:
 		req_cmd = MOVE_CMD;
 		break;
+	case PKGMGR_REQ_SMACK:
+		req_cmd = SMACK_CMD;
+		break;
 	case PKGMGR_REQ_PERM:
 		goto PARSEERROR;
 	case PKGMGR_REQ_INVALID:
@@ -137,7 +142,7 @@ int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data)
 
 		move_type = pkgmgr_installer_get_move_type(pi);
 	}
-	if ((req_cmd < INSTALL_CMD) ||(req_cmd > MOVE_CMD)) {
+	if ((req_cmd < INSTALL_CMD) ||(req_cmd > RPM_CMD_MAX)) {
 		_d_msg(DEBUG_ERR, "invalid command \n");
 		goto PARSEERROR;
 	}
@@ -197,6 +202,10 @@ static int __ri_process_request(ri_frontend_cmdline_arg *data)
 	case RECOVER_CMD:
 		_d_msg(DEBUG_INFO, "rpm-backend -r \n");
 		ret = _rpm_backend_interface(keyid, pkgid, "recover");
+		break;
+	case SMACK_CMD:
+		_d_msg(DEBUG_INFO, "rpm-backend -s %s\n", pkgid);
+		ret = _rpm_backend_interface(keyid, pkgid, "smack");
 		break;
 	default:
 		_d_msg(DEBUG_ERR,

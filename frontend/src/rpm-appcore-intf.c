@@ -34,13 +34,51 @@
 #include "rpm-installer.h"
 #include <pkgmgr_installer.h>
 
+#define CONFIG_PATH		"/usr/etc/rpm-installer-config.ini"
 static void __ri_start_processing(void *user_data);
+static int __ri_is_signature_verification_enabled();
 
 int ret_val = -1;
+/*flag to check whether signature verification is on/off*/
+int sig_enable = 0;
 struct appdata ad;
 extern char scrolllabel[256];
 extern ri_frontend_data front_data;
 pkgmgr_installer *pi = NULL;
+
+static int __ri_is_signature_verification_enabled()
+{
+	char buffer[1024] = {'\0'};
+	char *p = NULL;
+	FILE *fi = NULL;
+	int len = 0;
+	int ret = 0;
+	fi = fopen(CONFIG_PATH, "r");
+	if (fi == NULL) {
+		_d_msg(DEBUG_ERR, "Failed to open config file [%s]\n", CONFIG_PATH);
+		return 0;
+	}
+	while (fgets(buffer, 1024, fi) != NULL) {
+		/* buffer will be like signature=off\n\0*/
+		if (strncmp(buffer, "signature", strlen("signature")) == 0) {
+			len = strlen(buffer);
+			/*remove newline character*/
+			buffer[len - 1] = '\0';
+			p = strchr(buffer, '=');
+			if (p) {
+				p++;
+				if (strcmp(p, "on") == 0)
+					ret = 1;
+				else
+					ret = 0;
+			}
+		} else {
+			continue;
+		}
+	}
+	fclose(fi);
+	return ret;
+}
 
 /**< Called before main loop */
 int app_create(void *user_data)
@@ -174,6 +212,9 @@ int main(int argc, char *argv[])
 	ecore_init();
 	appcore_set_i18n(PACKAGE, LOCALE_PATH);
 	_d_msg_init("rpm-installer");
+	/*get signature verification config*/
+	sig_enable = __ri_is_signature_verification_enabled();
+	_d_msg(DEBUG_INFO, "Signature Verification Mode is [%d]\n", sig_enable);
 	data = (ri_frontend_cmdline_arg *) calloc(1,
 						  sizeof
 						  (ri_frontend_cmdline_arg));
@@ -204,6 +245,10 @@ int main(int argc, char *argv[])
 
 	/*The installer has finished the installation/uninstallation.
 	   Now, if it was a non quiet operation we need to show the popup. */
+	if (data->req_cmd == SMACK_CMD) {
+		goto ERROR;
+	}
+
 	ecore_idler_add(show_popup_cb, NULL);
 
 	_d_msg(DEBUG_RESULT, "About to run EFL Main Loop");
@@ -215,6 +260,7 @@ int main(int argc, char *argv[])
 		pkgmgr_installer_free(pi);
 		pi = NULL;
 	}
+
 	if(!ret_val)
 		sync();
 
@@ -233,7 +279,7 @@ int main(int argc, char *argv[])
 		free(data);
 		data = NULL;
 	}
-	_d_msg(DEBUG_RESULT, "%d\n", ret);
+	_d_msg(DEBUG_INFO, "%d\n", ret);
 	_d_msg_deinit();
 	return ret;
 

@@ -335,6 +335,14 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 			       "strdup failed due to insufficient memory\n");
 			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
+	} else if (strncmp(reqcommand, "smack", strlen("smack")) == 0) {
+		data.req_cmd = SMACK_CMD;
+		data.cmd_string = strdup("smack");
+		if (data.cmd_string == NULL) {
+			_d_msg(DEBUG_ERR,
+			       "strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
+		}
 	} else {
 		_d_msg(DEBUG_INFO, "wrong input parameter\n");
 		_d_msg(DEBUG_RESULT, "%d\n", RPM_INSTALLER_ERR_WRONG_PARAM);
@@ -629,6 +637,31 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 			}
 			break;
 		}
+
+	case SMACK_CMD:
+		{
+			if(strcmp(keyid,"ug-smack")==0) {
+				_d_msg(DEBUG_INFO, "only apply smack for ug\n");
+				char *perm[] = {"http://tizen.org/privilege/appsetting", NULL};
+				_ri_privilege_enable_permissions(data.pkgid, 1, perm, 1);
+				_ri_apply_smack(data.pkgid,0);
+			} else if (strcmp(keyid,"rpm-smack")==0) {
+				_d_msg(DEBUG_INFO, "apply smack for rpm\n");
+				_ri_apply_smack(data.pkgid,0);
+			} else if (strcmp(keyid,"core-xml")==0) {
+				_d_msg(DEBUG_INFO, "install corexml\n");
+				ret = _rpm_installer_corexml_install(pkgid);
+				if (ret != 0) {
+					_d_msg(DEBUG_ERR, "corexml_install failed with err(%d)\n", ret);
+				} else {
+					_d_msg(DEBUG_INFO, "corexml_install success\n");
+				}
+			} else {
+				_d_msg(DEBUG_ERR, "smack cmd error\n");
+			}
+			ret = RPM_INSTALLER_SUCCESS;
+			break;
+		}
 	default:
 		{
 			_ri_broadcast_status_notification("unknown", "command",
@@ -658,7 +691,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		_ri_set_backend_state_info(REQUEST_COMPLETED);
 		/* set the backend state as completed */
 		_ri_set_backend_state(1);
-		_d_msg(DEBUG_RESULT, "%d\n", ret);
+		_d_msg(DEBUG_INFO, "%d\n", ret);
 		_d_msg_deinit();
 	}
 	return ret;

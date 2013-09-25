@@ -10,19 +10,19 @@ set(CMAKE_SKIP_BUILD_RPATH true)
 INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/inc ${CMAKE_SOURCE_DIR}/backend/inc ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
 INCLUDE(FindPkgConfig)
-pkg_check_modules(pkgs REQUIRED pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server security-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util elementary appcore-efl libxml-2.0 app2sd)
+pkg_check_modules(pkgs REQUIRED pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server security-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util elementary appcore-efl libxml-2.0 app2sd cert-svc xmlsec1)
 
 FOREACH(flag ${pkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
 
-pkg_check_modules(libpkgs REQUIRED security-server pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util elementary appcore-efl libxml-2.0 app2sd)
+pkg_check_modules(libpkgs REQUIRED security-server pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util elementary appcore-efl libxml-2.0 app2sd cert-svc xmlsec1)
 
 FOREACH(flag ${libpkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
 
-pkg_check_modules(STATUS pkgmgr-installer-status-broadcast-server pkgmgr pkgmgr-installer pkgmgr-parser libxml-2.0 app2sd pkgmgr-info)
+pkg_check_modules(STATUS pkgmgr-installer-status-broadcast-server pkgmgr pkgmgr-installer pkgmgr-parser libxml-2.0 app2sd pkgmgr-info cert-svc xmlsec1)
 link_directories (${STATUS_LIBRARY_DIRS})
 include_directories (${STATUS_INCLUDE_DIRS})
 
@@ -41,6 +41,7 @@ include_directories (${SECURITYSERVER_INCLUDE_DIRS})
 ## DEFINITIONS
 ADD_DEFINITIONS("-DAPP_DIR=\"${CMAKE_INSTALL_PREFIX}\"")
 ADD_DEFINITIONS("-DPACKAGE=\"${PROJECT_NAME}\"")
+ADD_DEFINITIONS("-DXMLSEC_CRYPTO_OPENSSL")
 
 link_directories ("${STATUS_LIBRARY_DIRS} /usr/lib")
 include_directories (${STATUS_INCLUDE_DIRS})
@@ -68,7 +69,7 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 
 ####################################################################################################
 ## for rpm-backend (binary)
-SET(rpm-backend_SOURCES ${backend_c_src_dir}/core/rpm-installer-core.c ${backend_c_src_dir}/core/rpm-installer-tool.c ${backend_c_src_dir}/rpm/rpm-installer.c ${backend_c_src_dir}/rpm/rpm-installer-privilege.c ${backend_c_src_dir}/vconf/rpm-vconf-intf.c ${frontend_c_src_dir}/rpm-appcore-intf.c  ${frontend_c_src_dir}/rpm-cmdline.c  ${frontend_c_ui_src_dir}/rpm-homeview.c)
+SET(rpm-backend_SOURCES ${backend_c_src_dir}/core/rpm-installer-core.c ${backend_c_src_dir}/core/rpm-installer-tool.c ${backend_c_src_dir}/rpm/rpm-installer.c ${backend_c_src_dir}/rpm/rpm-installer-signature.c ${backend_c_src_dir}/rpm/rpm-installer-privilege.c ${backend_c_src_dir}/vconf/rpm-vconf-intf.c ${frontend_c_src_dir}/rpm-appcore-intf.c  ${frontend_c_src_dir}/rpm-cmdline.c  ${frontend_c_ui_src_dir}/rpm-homeview.c)
 
 SET(rpm-backend_CFLAGS " -I. -I/usr/include/rpm -I${backend_inc_dir} -I${frontend_inc_dir} -I${frontend_c_ui_inc_dir} ${pkg_CFLAGS}")
 SET(rpm-backend_LDFLAGS ${pkgs_LDFLAGS})
@@ -107,5 +108,6 @@ INSTALL(FILES
                 DESTINATION bin)
 
 
+INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/rpm-installer-config.ini DESTINATION /usr/etc)
 INSTALL(TARGETS rpm-backend DESTINATION bin PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_WRITE)
 

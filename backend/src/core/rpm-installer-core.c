@@ -50,7 +50,6 @@
 #define QUERY_PACKAGE		"/usr/bin/query_rpm_package.sh"
 #define RPM_PKG_INFO		"/var/rpmpkg.info"
 
-
 extern char *gpkgname;
 extern int do_upgrade;
 static int __ri_recursive_delete_dir(char *dirname);
@@ -209,12 +208,64 @@ pkginfo *_rpm_installer_get_pkgname_info(char *pkgid)
 	return info;
 }
 
+int _rpm_installer_corexml_install(char *pkgfilepath)
+{
+	/* Get package ID from filepath <pkgid.xml>*/
+	char *p = NULL;
+	char *q = NULL;
+	char *temp = NULL;
+	int ret = 0;
+	int idx = 0;
+	temp = strdup(pkgfilepath);
+	if (temp == NULL)
+		return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
+	p = strrchr(temp, '/');
+	if (p) {
+		p++;
+	} else {
+		free(temp);
+		return RPM_INSTALLER_ERR_INTERNAL;
+	}
+	/*p now points to pkgid.xml*/
+	q = strrchr(p, '.');
+	if (q == NULL) {
+		_d_msg(DEBUG_ERR, "Failed to extract pkgid from xml name\n");
+		free(temp);
+		return RPM_INSTALLER_ERR_INTERNAL;
+	}
+	idx = strlen(p) - strlen(q);
+	p[idx] = '\0';
+	_d_msg(DEBUG_INFO, "Package ID is %s\n", p);
+	ret = _rpm_install_corexml(pkgfilepath, p);
+	free(temp);
+	return ret;
+}
+
 int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 				   char *installoptions)
 {
 	int err = 0;
+	char *p = NULL;
 	if (forceinstall == true && installoptions == NULL)
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
+
+	/* Check for core xml installation */
+	p = strrchr(pkgfilepath, '.');
+	if (p) {
+		if (strncmp(p+1, "xml", 3) == 0) {
+			err = _rpm_installer_corexml_install(pkgfilepath);
+			if (err) {
+				_d_msg(DEBUG_ERR, "_rpm_installer_corexml_install() failed\n");
+			} else {
+				_d_msg(DEBUG_ERR, "_rpm_installer_corexml_install() success\n");
+			}
+			return err;
+		}
+	} else {
+		_d_msg(DEBUG_ERR, "pkgfilepath does not have an extension\n");
+		return RPM_INSTALLER_ERR_INTERNAL;
+	}
+	/* rpm installation */
 	pkginfo *info = NULL;
 	pkginfo *tmpinfo = NULL;
 	/*Check to see if the package is already installed or not
@@ -253,6 +304,8 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 		}
 	} else if (strcmp(info->version, tmpinfo->version) > 0) {
 		/*upgrade */
+		_ri_broadcast_status_notification(info->package_name, "start", "update");
+
 		err = _rpm_upgrade_pkg(pkgfilepath, "--force");
 		if (err != 0) {
 			_d_msg(DEBUG_ERR,
@@ -391,6 +444,7 @@ int _rpm_installer_package_uninstall(char *pkgid)
 		free(gpkgname);
 		gpkgname = NULL;
 	}
+
 	gpkgname = strdup(pkgid);
 	_ri_broadcast_status_notification(pkgid, "start", "uninstall");
 	_ri_broadcast_status_notification(pkgid, "command", "Uninstall");
