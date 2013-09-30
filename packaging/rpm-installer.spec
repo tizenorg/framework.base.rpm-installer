@@ -59,6 +59,9 @@ make %{?jobs:-j%jobs}
 rm -rf %{buildroot}
 %make_install
 
+mkdir -p %{buildroot}/usr/share/license
+cp LICENSE %{buildroot}/usr/share/license/%{name}
+
 %post
 mkdir -p /usr/etc/package-manager/backend
 mkdir -p /usr/etc/package-manager/backendlib
@@ -87,3 +90,4 @@ vconftool set -t int db/private/rpm-installer/requestinfo/options "0" -f
 %attr(0644,-,-) /usr/share/locale/en_US/LC_MESSAGES/rpm-installer.mo
 %attr(0644,-,-) /usr/share/locale/ko_KR/LC_MESSAGES/rpm-installer.mo
 %attr(0644,-,-) /usr/lib/libnativerpm.so
+/usr/share/license/%{name}
