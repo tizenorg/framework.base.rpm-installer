@@ -1,0 +1,115 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+# Sample debian/rules that uses debhelper.
+# This file was originally written by Joey Hess and Craig Small.
+# As a special exception, when this file is copied by dh-make into a
+# dh-make output file, you may use that output file without restriction.
+# This special exception was added by Craig Small in version 0.37 of dh-make.
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+include debian/desktop.slp
+include debian/control.slp
+
+PKGDIR = debian/$(Package)
+DESKTOPFILE = debian/desktop.slp
+DESKTOPDIR = usr/share/install-info/application
+
+CFLAGS = -Wall -g
+
+ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
+	CFLAGS += -O0
+else
+	CFLAGS += -O2
+endif
+
+configure: configure-stamp
+configure-stamp:
+	dh_testdir
+	# Add here commands to configure the package.
+	rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
+	cmake . -DCMAKE_INSTALL_PREFIX=/usr
+	rm -rf CMakeFiles/CompilerIdC*
+	touch configure-stamp
+
+
+build: build-stamp
+
+build-stamp: configure-stamp
+	dh_testdir
+
+	# Add here commands to compile the package.
+	$(MAKE)
+	#docbook-to-man debian/native-installer.sgml > native-installer.1
+
+	touch $@
+
+clean:
+	dh_testdir
+	dh_testroot
+	rm -f build-stamp configure-stamp
+	# Add here commands to clean up after the build process.
+	-$(MAKE) clean
+	dh_clean
+	rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
+	cd backend && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
+	cd backend-lib && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
+	rm -f backend/install_rpm_package.sh  backend/install_rpm_package_with_dbpath_ro.sh  backend/install_rpm_package_with_dbpath_rw.sh  backend/uninstall_rpm_package.sh  backend/upgrade_rpm_package.sh  backend/upgrade_rpm_package_with_dbpath_ro.sh  backend/upgrade_rpm_package_with_dbpath_rw.sh  backend/query_rpm__package.sh  backend/cpio_rpm_package.sh  backend/cpio_rpm_package_update_xml.sh
+	cd frontend && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb *.sh rpm-backend
+	cd common && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb *.a
+	cd frontend && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
+	cd po && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb *.mo
+	rm -rf $(CURDIR)/debian/rpm-installer
+	rm -rf $(CURDIR)/debian/rpm-installer-dbg
+
+install: build
+	dh_testdir
+	dh_testroot
+	dh_clean -k
+	dh_installdirs
+
+	# Add here commands to install the package into debian/rpm-installer.
+	$(MAKE) DESTDIR=$(CURDIR)/$(PKGDIR) install
+#	mkdir -p $(CURDIR)/$(PKGDIR)/$(DESKTOPDIR)
+#	cp $(DESKTOPFILE) $(CURDIR)/$(PKGDIR)/$(DESKTOPDIR)/$(Package).desktop
+
+
+# Build architecture-independent files here.
+binary-indep: build install
+# We have nothing to do by default.
+
+# Build architecture-dependent files here.
+binary-arch: build install
+	dh_testdir
+	dh_testroot
+	dh_installchangelogs
+	dh_installdocs
+	dh_installexamples
+#	cp $(DESKTOPFILE) $(CURDIR)/debian/native-installer/$(DESKTOPDIR)/$(Package).desktop
+#	dh_install
+#	dh_installmenu
+#	dh_installdebconf
+#	dh_installlogrotate
+#	dh_installemacsen
+#	dh_installpam
+#	dh_installmime
+#	dh_python
+#	dh_installinit
+#	dh_installcron
+#	dh_installinfo
+	dh_installman
+	dh_link
+	dh_strip --dbg-package=$(Package)-dbg
+	dh_compress
+	dh_fixperms
+#	dh_perl
+#	dh_makeshlibs
+	dh_installdeb
+	dh_shlibdeps
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+binary: binary-indep binary-arch
+.PHONY: build clean binary-indep binary-arch binary install configure

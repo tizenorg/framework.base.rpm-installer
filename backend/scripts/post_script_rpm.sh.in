@@ -1,0 +1,6 @@
+#!/bin/sh
+
+RPM_FILE=$1
+OUTPUT=$2
+
+rpm -qp $RPM_FILE --queryformat="[%{POSTIN}\n]" > $OUTPUT

@@ -1,0 +1,11 @@
+#Fri Feb 03 17:26:45 KST 2012
+Name=rpm-installer
+Type=Application
+Exec=/usr/etc/package-manager/backend/rpm
+Icon=
+Comment=
+MimeType=application/x-rpm
+Hidden=true
+Version=0.1.1
+X-SLP-TaskManage=true
+X-SLP-Multiple=true

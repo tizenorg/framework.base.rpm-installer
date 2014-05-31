@@ -1,0 +1,18 @@
+Source: rpm-installer
+Section: base
+Priority: extra
+Maintainer: Shobhit Srivastava <shobhit.s@samsung.com>, Sewook Park <sewook7.park@samsung.com>
+Build-Depends: debhelper (>= 5), libslp-setting-dev, libsqlite3-dev, libslp-db-util-dev, libdbus-glib-1-dev, libglib2.0-dev, libpkgmgr-installer-dev, libsecurity-server-client-dev, libelm-dev, libappcore-efl-dev, dlog-dev, libpkgmgr-types-dev, libevas-dev, libecore-dev, libedje-dev, libmdm-dev
+Standards-Version: 3.7.2
+
+Package: rpm-installer
+Section: base
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: rpm installer package
+
+Package: rpm-installer-dbg
+Section: debug
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends} rpm-installer
+Description: rpm installer debug package

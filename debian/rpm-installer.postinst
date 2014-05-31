@@ -1,0 +1,14 @@
+#!/bin/sh
+
+mkdir -p /usr/etc/package-manager/backend
+ln -sf /usr/bin/rpm-backend /usr/etc/package-manager/backend/rpm
+ln -sf /usr/lib/libnativerpm.so /usr/etc/package-manager/backendlib/librpm.so
+if [ "${USER}" = "root" ]
+then
+        chown 5000:5000 /usr/lib/rpm-installer/librpm-util.a
+        chown 5000:5000 /usr/bin/rpm-backend
+fi
+
+chmod 755 /usr/lib/rpm-installer/librpm-util.a
+chmod 755 /usr/bin/rpm-backend
+

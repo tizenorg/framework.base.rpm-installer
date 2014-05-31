@@ -1,0 +1,45 @@
+#!/bin/sh
+E_RPM_NOT_INSTALLED=1
+E_RPM_ALREADY_INSTALLED=2
+E_WRONG_ARGS=17
+E_FILE_NOT_FOUND=11
+
+echo "find pakcage $1" >> /tmp/rpmscriptlog
+
+CURDIR=`pwd`
+echo $CURDIR >> /tmp/rpmscriptlog
+
+debug () {
+	/bin/echo ">>$DEBUG" >> /tmp/rpmscriptlog
+}
+
+if [ $# -ne 1 ];then
+	DEBUG="Usage: query_package.sh PKG_FILE";debug
+	exit $E_WRONG_ARGS
+fi
+
+PKGNAME=$1
+/bin/echo "pkg name = $PKGNAME" >> /tmp/rpmscriptlog
+
+PKG_LOG_DIR=/var/pkgmgr/$PKGNAME
+if [ ! -d $PKG_LOG_DIR ];then
+	DEBUG="$PKG_LOG_DIR not exist -> mkdir(ok)";debug
+	/bin/mkdir -p $PKG_LOG_DIR
+fi
+
+if [ -f $PKGNAME ]; then
+	/bin/rpm -qpi $PKGNAME
+	retval=$?
+else
+	/bin/rpm -qi $PKGNAME
+	retval=$?
+fi
+echo "retval = $retval" >> /tmp/rpmscriptlog
+
+if [ $retval -ne 0 ];then
+	DEBUG="pakcage not exist";debug
+	cd $CURDIR
+	exit $E_RPM_NOT_INSTALLED
+else
+	exit $E_RPM_ALREADY_INSTALLED
+fi

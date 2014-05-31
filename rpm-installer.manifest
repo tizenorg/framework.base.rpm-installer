@@ -1,0 +1,18 @@
+<manifest>
+	<request>
+		<domain name="_"/>
+	</request>
+	<assign>
+		<filesystem path="/usr/bin/install_rpm_package.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/install_rpm_package_with_dbpath_ro.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/install_rpm_package_with_dbpath_rw.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/query_rpm_package.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/rpm-backend" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/uninstall_rpm_package.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/upgrade_rpm_package.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/upgrade_rpm_package_with_dbpath_ro.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/upgrade_rpm_package_with_dbpath_rw.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/cpio_rpm_package.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/cpio_rpm_package_update_xml.sh" label="_" exec_label="none"/>
+	</assign>
+</manifest>

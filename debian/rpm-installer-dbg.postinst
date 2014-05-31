@@ -1,0 +1,5 @@
+#!/bin/sh
+
+mkdir -p /usr/etc/package-manager/backend
+chmod 755 /usr/lib/rpm-installer/librpm-util.a
+chmod 755 /usr/lib/debug/usr/bin/rpm-backend

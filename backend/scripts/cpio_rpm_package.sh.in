@@ -1,0 +1,3 @@
+#!/bin/sh
+PKGFILE_PATH="$1"
+/usr/bin/rpm2cpio "$PKGFILE_PATH" | cpio -idmv find -name *.xml

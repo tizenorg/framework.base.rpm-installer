@@ -1,0 +1,34 @@
+#!/bin/sh
+
+E_WRONG_ARGS=17
+E_FILE_NOT_FOUND=11
+E_RPM_ERROR=15
+
+PKG_LOG_DIR=/var/pkgmgr/rpm
+
+debug () {
+        /bin/echo ">>$DEBUG" >> /tmp/rpmscriptlog
+}
+
+NOARG=$#
+
+if [ $NOARG -lt 1 ] || [ $NOARG -gt 2 ]; then
+        DEBUG="Usage: uninstall.sh <PackageName>";debug
+        exit $E_WRONG_ARGS
+fi
+
+
+if [ ! -d $PKG_LOG_DIR ];then
+        DEBUG="$PKG_LOG_DIR not exist -> mkdir(ok)";debug
+        /bin/mkdir -p $PKG_LOG_DIR
+fi
+
+PKGNAME=$1
+
+# 3. DELETE FILES
+/bin/rpm --erase --nodeps $PKGNAME
+ret=$?
+if [ $ret -ne 0 ];then
+	DEBUG="rpm error";debug
+	exit $E_RPM_ERROR
+fi
