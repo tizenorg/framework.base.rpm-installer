@@ -22,14 +22,10 @@
 
 #include <stdio.h>
 #include <pthread.h>
-
-#include <Elementary.h>
-#include <appcore-efl.h>
 #include <string.h>
-#include <glib-object.h>
+#include <device/power.h>
 
 #include "rpm-frontend.h"
-#include "rpm-homeview.h"
 #include "rpm-installer-util.h"
 #include "rpm-installer.h"
 #include <pkgmgr_installer.h>
@@ -42,7 +38,6 @@ int ret_val = -1;
 /*flag to check whether signature verification is on/off*/
 int sig_enable = 0;
 int broadcast_disable = 0;
-struct appdata ad;
 extern char scrolllabel[256];
 extern ri_frontend_data front_data;
 pkgmgr_installer *pi = NULL;
@@ -57,7 +52,7 @@ static int __ri_is_signature_verification_enabled()
 	int ret = 0;
 	fi = fopen(CONFIG_PATH, "r");
 	if (fi == NULL) {
-		_d_msg(DEBUG_ERR, "Failed to open config file [%s]\n", CONFIG_PATH);
+		_LOGE("Failed to open config file [%s]\n", CONFIG_PATH);
 		return 0;
 	}
 	while (fgets(buffer, 1024, fi) != NULL) {
@@ -82,118 +77,15 @@ static int __ri_is_signature_verification_enabled()
 	return ret;
 }
 
-/**< Called before main loop */
-int app_create(void *user_data)
-{
-
-	int ret = 0;
-	struct appdata *data = (struct appdata *)user_data;
-	/*In case of downgrade, popup should be shown even if quiet mode*/
-	ret = _ri_frontend_launch_main_view(data);
-	return ret;
-}
-
-/**< Called after main loop */
-int app_terminate(void *user_data)
-{
-	struct appdata *data = (struct appdata *)user_data;
-	ri_frontend_cmdline_arg *fdata = front_data.args;
-	if (fdata->quiet == 0) {
-		_ri_destroy_home_view(data);
-	}
-	return 0;
-}
-
-/**< Called when every window goes back */
-int app_pause(void *user_data)
-{
-	return 0;
-}
-
-/**< Called when any window comes on top */
-int app_resume(void *user_data)
-{
-	return 0;
-}
-
-/**< Called at the first idler*/
-int app_reset(bundle *b, void *user_data)
-{
-	return 0;
-}
-
-/**< Called at rotate device*/
-int app_rotation(int mode, void *user_data)
-{
-	if (user_data == NULL) {
-		_d_msg(DEBUG_ERR, "arg supplied is NULL \n");
-		return -1;
-	}
-	struct appdata *data = (struct appdata *)user_data;
-	int angle;
-	switch (mode) {
-	case APPCORE_RM_LANDSCAPE_NORMAL:
-		angle = -90;
-		break;
-
-	case APPCORE_RM_LANDSCAPE_REVERSE:
-		angle = 90;
-		break;
-
-	case APPCORE_RM_PORTRAIT_REVERSE:
-		angle = 180;
-		break;
-
-	case APPCORE_RM_UNKNOWN:
-	case APPCORE_RM_PORTRAIT_NORMAL:
-	default:
-		angle = 0;
-		break;
-	}
-
-	return 0;
-}
-
-Eina_Bool show_popup_cb(void *data)
-{
-	/*Avoid log printing as it is an idler function*/
-	int state = -1;
-	char message[256] = {'\0'};
-	state = _ri_get_backend_state_info();
-	switch (state) {
-	case REQUEST_ACCEPTED:
-		break;
-	case GOT_PACKAGE_INFO_SUCCESSFULLY:
-		break;
-	case REQUEST_PENDING:
-		strncpy(message, _("Continue Downgrade?"), 255);
-		_ri_package_downgrade_information(message);
-		/*request is not completed yet. We just got confirmation
-		from user whether to downgrade or not*/
-		_ri_set_backend_state_info(REQUEST_ACCEPTED);
-		break;
-	case REQUEST_COMPLETED:
-	default:
-		if (front_data.args->quiet == 0) {
-			_ri_frontend_update_progress_info(&ad, scrolllabel);
-			return 0;
-		} else
-			elm_exit();
-		break;
-	}
-
-	return 1;
-}
 
 static void __ri_start_processing(void *user_data)
 {
 	int ret = 0;
 	if (user_data == NULL) {
-		_d_msg(DEBUG_ERR, "arg supplied is NULL \n");
+		_LOGE("arg supplied is NULL \n");
 		return;
 	}
 	ri_frontend_data *data = (ri_frontend_data *) user_data;
-	g_type_init();
 	ret = _ri_cmdline_process(data);
 	ret_val = ret;
 	_ri_cmdline_destroy(data);
@@ -202,35 +94,57 @@ static void __ri_start_processing(void *user_data)
 
 int main(int argc, char *argv[])
 {
+	int i = 0;
 	int ret = 0;
-	int is_eflwgt = 0;
+	char *errstr = NULL;
 	ri_frontend_cmdline_arg *data = NULL;
-	struct appcore_ops ops;
-	ops.create = app_create;
-	ops.terminate = app_terminate;
-	ops.pause = app_pause;
-	ops.resume = app_resume;
-	ops.reset = app_reset;
-	ops.data = &ad;
-	ecore_init();
-	appcore_set_i18n(PACKAGE, LOCALE_PATH);
-	_d_msg_init("rpm-installer");
+	struct stat st;
+
+	_LOGD("------------------------------------------------");
+	_LOGD(" [START] rpm-installer: version=[%s]", RPM_INSTALLER_VERSION);
+	_LOGD("------------------------------------------------");
+
+	// hybrid
+	ret = _ri_parse_hybrid(argc, argv);
+	if (ret == RPM_INSTALLER_SUCCESS) {
+		_LOGD("------------------------------------------------");
+		_LOGD(" [END] rpm-installer: _ri_parse_hybrid() succeed.");
+		_LOGD("------------------------------------------------");
+		fprintf(stdout, "%d", ret);
+		return 0;
+	}
+
+	for (i = 0; i < argc; i++)
+	{
+		const char* pStr = argv[i];
+		if (pStr)
+		{
+			_LOGD("argv[%d] = [%s]", i, pStr);
+		}
+	}
+
+	// power_lock
+	ret = device_power_request_lock(POWER_LOCK_CPU, 0);
+	_LOGD("device_power_lock_state(POWER_LOCK_CPU, 0), ret = [%d]", ret);
+
+	/* Initialize the xml parser */
+	xmlInitParser();
+	// _LOGD("xml parser initialized");
+
 	/*get signature verification config*/
 	sig_enable = __ri_is_signature_verification_enabled();
-	_d_msg(DEBUG_INFO, "Signature Verification Mode is [%d]\n", sig_enable);
-
+	_LOGD("signature verification mode is [%s]", sig_enable?"on":"off");
 
 	data = (ri_frontend_cmdline_arg *) calloc(1,
 						  sizeof
 						  (ri_frontend_cmdline_arg));
 	if (data == NULL) {
-		_d_msg(DEBUG_ERR, "Not Enough Memory\n");
+		_LOGE("Not Enough Memory\n");
 		ret = RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		goto ERROR;
 	}
 	data->keyid = NULL;
 	data->pkgid = NULL;
-	data->quiet = 0;
 	data->req_cmd = INVALID_CMD;
 	data->move_type = -1;
 
@@ -238,32 +152,63 @@ int main(int argc, char *argv[])
 	   to parse the arguments */
 	if ((ret =
 	     _ri_parse_cmdline(argc, argv, data)) != RPM_INSTALLER_SUCCESS) {
-		_d_msg(DEBUG_ERR, "_ri_parse_cmdline failed \n");
+		_LOGE("_ri_parse_cmdline failed \n");
 		goto ERROR;
 	}
-	
-	/*check downloadable rpm*/
-	if (strstr(data->keyid, ".wgt") != NULL) {
-		_d_msg(DEBUG_ERR, "[%s] is eflwgt package.\n", data->pkgid);
-		if (data->req_cmd == INSTALL_CMD) {
+
+#if 0
+	/*
+	Check for converted wgt package.
+	*/
+	if(strstr(data->pkgid,".wgt") != NULL){
+		_LOGD("[%s] is eflwgt package.\n", data->pkgid);
+		if(data->req_cmd == INSTALL_CMD){
 			data->req_cmd = EFLWGT_INSTALL_CMD;
-		} else if (data->req_cmd == DELETE_CMD) {
-			data->req_cmd = EFLWGT_DELETE_CMD;
-		} else {
-			_d_msg(DEBUG_ERR, "unsupported command.\n");
+	       		ret = _ri_process_wgt_package(&data->pkgid);
+			if(ret != RPM_INSTALLER_SUCCESS){
+				_ri_error_no_to_string(ret, &errstr);
+				_LOGE("ERROR:[%s]",errstr);
+				goto ERROR;
+			}
+		}else{
+			ret = RPM_INSTALLER_ERR_CMD_NOT_SUPPORTED;
+			_ri_error_no_to_string(ret,&errstr);
+			_LOGE("ERROR:[%s]",errstr);
 			goto ERROR;
 		}
 	}
+#endif
 
 	if (strstr(data->keyid, "change-state") != NULL) {
-		_d_msg(DEBUG_ERR, "change-state for [%s]\n", data->pkgid);
+		_LOGE("change-state for [%s]\n", data->pkgid);
 		if (data->req_cmd == INSTALL_CMD) {
 			data->req_cmd = ENABLE_CMD;
 		} else if (data->req_cmd == DELETE_CMD) {
 			data->req_cmd = DISABLE_CMD;
 		} else {
-			_d_msg(DEBUG_ERR, "unsupported command.\n");
+			ret = RPM_INSTALLER_ERR_CMD_NOT_SUPPORTED;
+			_ri_error_no_to_string(ret,&errstr);
+			_LOGE("ERROR:[%s]",errstr);
 			goto ERROR;
+		}
+	}
+
+	/*installation for coretpk*/
+	if ((strstr(argv[0], "coretpk") != NULL)
+			&& (data->req_cmd == INSTALL_CMD)) {
+		if (stat(data->pkgid, &st)) {
+			ret = RPM_INSTALLER_ERR_UNKNOWN;
+			_ri_error_no_to_string(ret, &errstr);
+			_LOGE("ERROR:[%s]",errstr);
+			goto ERROR;
+		}
+
+		if (S_ISDIR(st.st_mode)) {
+			_LOGD("[%s] is directory for tpk.\n", data->pkgid);
+			data->req_cmd = CORETPK_DIRECTORY_INSTALL_CMD;
+		} else {
+			_LOGD("[%s] is tpk package.\n", data->pkgid);
+			data->req_cmd = CORETPK_INSTALL_CMD;
 		}
 	}
 
@@ -273,44 +218,35 @@ int main(int argc, char *argv[])
 
 	__ri_start_processing(&front_data);
 
-	/*The installer has finished the installation/uninstallation.
-	   Now, if it was a non quiet operation we need to show the popup. */
-	if ((data->req_cmd == SMACK_CMD) || (data->req_cmd == EFLWGT_INSTALL_CMD) || (data->req_cmd == EFLWGT_DELETE_CMD) || (data->req_cmd == ENABLE_CMD) || (data->req_cmd == DISABLE_CMD)){
-		goto ERROR;
+	ret = ret_val;
+	if ((strstr(data->keyid, ".tpk") != NULL) || (strstr(data->pkgid,".wgt") != NULL)) {
+		if(!ret_val) {
+			_LOGD("sync() start");
+			sync();
+			_LOGD("sync() end");
+		}
 	}
 
-	ecore_idler_add(show_popup_cb, NULL);
 
-	_d_msg(DEBUG_RESULT, "About to run EFL Main Loop");
-	appcore_efl_main(PACKAGE, &argc, &argv, &ops);
-	_d_msg(DEBUG_RESULT, "%d\n", ret_val);
+ERROR:
+	device_power_release_lock(POWER_LOCK_CPU);
 
-	_d_msg_deinit();
 	if (pi) {
 		pkgmgr_installer_free(pi);
 		pi = NULL;
 	}
 
-	if(!ret_val)
-		sync();
-
-	return ret_val;
-
- ERROR:
 	if (data) {
-		if (data->pkgid) {
-			free(data->pkgid);
-			data->pkgid = NULL;
-		}
-		if (data->keyid) {
-			free(data->keyid);
-			data->keyid = NULL;
-		}
 		free(data);
 		data = NULL;
 	}
-	_d_msg(DEBUG_INFO, "%d\n", ret);
-	_d_msg_deinit();
+
+	xmlCleanupParser();
+	_LOGD("------------------------------------------------");
+	_LOGD(" [END] rpm-installer: result=[%d]", ret);
+	_LOGD("------------------------------------------------");
+
+
 	return ret;
 
 }

@@ -35,12 +35,83 @@ extern "C" {
 #include <libgen.h>
 #include <wait.h>
 #include <stdio.h>
+#include <dirent.h>
+#include <rpm/header.h>
+#include <rpm/rpmts.h>
+#include <rpm/rpmlib.h>
+
+
+#include <libxml/parser.h>
+#include <libxml/xmlreader.h>
+#include <libxml/xmlschemas.h>
+#include <pkgmgr-info.h>
 
 #include <dlog.h>
 
+#ifdef	LOG_TAG
+#undef	LOG_TAG
+#define	LOG_TAG		"rpm-installer"
+#endif
+
+#define _LOGE(fmt, arg...) do { \
+			fprintf(stderr, "  ## "fmt"\n", ##arg); \
+			LOGE(fmt, ##arg); \
+		} while (0)
+
+#define _LOGD(fmt, arg...) do { \
+			fprintf(stderr, "  ## "fmt"\n", ##arg); \
+			LOGD(fmt, ##arg); \
+		} while (0)
+
+#define _LOGP(fmt, arg...)	fprintf(stderr, "[coretpk-installer] "fmt"\n", ##arg)
+
 #define RPM_BACKEND_EXEC	"rpm-backend"
 
-#define PKGTYPE "rpm"
+#define WGT_CONFIG	"config.xml"
+#define SIGNATURE1_XML						"signature1.xml"
+#define SIGNATURE2_XML						"signature2.xml"
+#define AUTHOR_SIGNATURE_XML				"author-signature.xml"
+
+#define ASCII(s) (const char *)s
+#define XMLCHAR(s) (const xmlChar *)s
+
+#define PKG_MAX_LEN		128
+#define VERSION_MAX_LEN	11
+
+#define DIRECTORY_PERMISSION_755			0755
+#define DIRECTORY_PERMISSION_644			0644
+#define FILE_PERMISSION_755					0755
+#define FILE_PERMISSION_644					0644
+
+struct pkginfo_t {
+	char package_name[PKG_MAX_LEN];
+	char version[VERSION_MAX_LEN];
+};
+typedef struct pkginfo_t pkginfo;
+
+struct privilegeinfo_t {
+	char package_id[PKG_MAX_LEN];
+	int visibility;
+};
+typedef struct privilegeinfo_t privilegeinfo;
+
+#ifndef PATH_MAX
+# define PATH_MAX 4096
+#endif
+
+#define FREE_AND_STRDUP(from, to) do { \
+		if (to) free((void *)to); \
+		if (from) to = strdup(from); \
+	} while (0)
+
+
+#define FREE_AND_NULL(ptr) do { \
+		if (ptr) { \
+			free((void *)ptr); \
+			ptr = NULL; \
+		} \
+	} while (0)
+
 
 /*Error number according to Tizen Native Package Manager Command Specification v1.0*/
 #define RPM_INSTALLER_SUCCESS					0
@@ -71,6 +142,9 @@ extern "C" {
 #define RPM_INSTALLER_ERR_ROOT_CERT_NOT_FOUND				31
 #define RPM_INSTALLER_ERR_CERT_INVALID					32
 #define RPM_INSTALLER_ERR_CERTCHAIN_VERIFICATION_FAILED		33
+#define RPM_INSTALLER_ERR_NO_CONFIG                                         34
+#define RPM_INSTALLER_ERR_INVALID_CONFIG	35
+#define RPM_INSTALLER_ERR_CMD_NOT_SUPPORTED	36
 
 #define RPM_INSTALLER_SUCCESS_STR			"Success"
 #define RPM_INSTALLER_ERR_WRONG_PARAM_STR		"Wrong Input Param"
@@ -99,25 +173,45 @@ extern "C" {
 #define RPM_INSTALLER_ERR_ROOT_CERT_NOT_FOUND_STR		"Root Cert Not Found"
 #define RPM_INSTALLER_ERR_CERT_INVALID_STR	"Invalid Certificate"
 #define RPM_INSTALLER_ERR_CERTCHAIN_VERIFICATION_FAILED_STR	"Certificate Chain Verification Failed"
+#define RPM_INSTALLER_ERR_NO_CONFIG_STR		"Config file is not present"
+#define RPM_INSTALLER_ERR_INVALID_CONFIG_STR	"Config file is not valid"
+#define RPM_INSTALLER_ERR_CMD_NOT_SUPPORTED_STR	"Unsupported Command"
 
 #define DEBUG_ERR		0x0001
 #define DEBUG_INFO		0x0002
 #define DEBUG_RESULT	0x0004
 
 #define RPM_LOG	1
+#define SIZE_KB	1024
+#define BUFF_SZE    1024
+#define RPM_INSTALLER_RW_INSTALL_PATH "/opt/usr"
+#define DIR_RPM_INSTALLER_APPLICATIONS_TEMP "/tmp/wgt_unzip"
+#define RPM_UNZIP "/usr/bin/unzip"
+#define DIR_PERMS (S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)
+#define DIR_RPM_WGT_SMACK_RULE_OPT "/opt/usr/.wgt/"
 
-void _print_msg(int type, int exetype, char *format, ...);
-
-#define _d_msg(type, fmtstr, args...) { \
-_print_msg(0x0001, RPM_LOG, "%s:%d:%s(): " fmtstr, basename(__FILE__), \
-__LINE__, __func__, ##args); \
-}
-
-	void _d_msg_init(char *program);
-	void _d_msg_deinit();
 	void _ri_error_no_to_string(int errnumber, char **errstr);
+	int _ri_recursive_delete_dir(char *dirname);
 	int _ri_string_to_error_no(char *errstr);
+	int _ri_get_available_free_memory(const char *opt_path, unsigned long *free_mem);
+	int  _ri_process_wgt_package(char** pkgid);
+	unsigned long  _ri_calculate_file_size(const char *filename);
+	int  _ri_wgt_package_extract(char *pkgid);
+	int  _ri_stream_config_file(const char* filename, pkginfo *info);
+	void _ri_process_config_node(xmlTextReaderPtr reader, pkginfo * info);
+	int _verify_wgt_package_signature_files();
+	void _ri_remove_wgt_unzip_dir();
+	int _ri_xsystem(const char *argv[]);
 
+	int  _get_package_name_from_xml(char* manifest,char** pkgname);
+	int  _get_pkgname_from_rpm_name(char* pkgfile,char** pkgname);
+	int _child_element(xmlTextReaderPtr reader, int depth);
+	char *_ri_basename(char *name);
+	int _ri_verify_sig_and_cert(const char *sigfile, int *visibility);
+	char* _manifest_to_package(const char* manifest);
+	int _rpm_delete_dir(char *dirname);
+	unsigned long  _ri_calculate_rpm_size( char* rpm_file);
+	int _ri_get_attribute(xmlTextReaderPtr reader,char *attribute, const char **xml_attribute);
 #ifdef __cplusplus
 }
 #endif				/* __cplusplus */

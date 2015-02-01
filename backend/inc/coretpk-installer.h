@@ -1,9 +1,7 @@
 /*
- * rpm-installer
+ * coretpk-installer
  *
  * Copyright (c) 2000 - 2011 Samsung Electronics Co., Ltd. All rights reserved.
- *
- * Contact:
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,22 +17,24 @@
  *
  */
 
-#ifndef __RPM_INSTALLER_TYPE_H_
-#define __RPM_INSTALLER_TYPE_H_
+#ifndef __CORETPK_INSTALLER_H_
+#define __CORETPK_INSTALLER_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif				/* __cplusplus */
 
-#define MAX_BUF_SIZE 				4096
-#define BUF_SIZE					1024
-#define TEMP_DIR					"/opt/usr/rpminstaller"
-#define CPIO_SCRIPT					"/usr/bin/cpio_rpm_package.sh"
-#define CPIO_SCRIPT_UPDATE_XML		"/usr/bin/cpio_rpm_package_update_xml.sh"
-#define MANIFEST_RW_DIRECTORY 		"/opt/share/packages"
-#define MANIFEST_RO_DIRECTORY 		"/usr/share/packages"
+/*use ri_frontend_cmdline_arg*/
+#include "rpm-frontend.h"
+
+int _coretpk_backend_interface(const char *reqcommand, const ri_frontend_cmdline_arg *data);
+int _coretpk_installer_prepare_package_install(char *pkgid, char *clientid);
+int _coretpk_installer_prepare_package_uninstall(const char *pkgid);
+int _coretpk_installer_prepare_directory_install(char* dirpath, char *clientid);
+int _coretpk_installer_package_move(char* pkgid, int movetype);
+int _coretpk_installer_request_hybrid(int hybridOperation, char* pPkgPath, int apiVisibility);
 
 #ifdef __cplusplus
 }
 #endif				/* __cplusplus */
-#endif				/* __RPM_INSTALLER_TYPE_H_ */
+#endif				/* __CORETPK_INSTALLER_H_ */

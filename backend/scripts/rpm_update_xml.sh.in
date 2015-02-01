@@ -1,0 +1,15 @@
+#!/bin/sh
+INPUT=$1
+CLIENTID=$2
+OUTPUT=$3
+
+if [ -z "$1" ]
+then
+	echo "error!"
+	exit 2
+fi
+
+if [ -n "$2" ]
+then
+	/bin/sed "s#\(<manifest[^>]*\)>#\1 storeclient-id=\"$CLIENTID\">#" $INPUT > $OUTPUT 
+fi

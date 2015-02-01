@@ -1,6 +1,6 @@
 Name:       rpm-installer
 Summary:    Native rpm installer
-Version:    0.1.68
+Version:    0.1.146
 Release:    1
 Group:      System/Libraries
 License:    Apache License, Version 2.0
@@ -25,22 +25,24 @@ BuildRequires:	pkgconfig(pkgmgr-info)
 BuildRequires:  pkgconfig(app2sd)
 BuildRequires:  pkgconfig(libxml-2.0)
 BuildRequires:  pkgconfig(security-server)
-BuildRequires:  pkgconfig(elementary)
-BuildRequires:  pkgconfig(appcore-efl)
 BuildRequires:  pkgconfig(cert-svc)
 BuildRequires:  pkgconfig(xmlsec1)
 BuildRequires:  pkgconfig(libxslt)
-BuildRequires:  pkgconfig(evas)
-BuildRequires:  pkgconfig(ecore)
 BuildRequires:  pkgconfig(edje)
 BuildRequires:	pkgconfig(libprivilege-control)
 BuildRequires:  pkgconfig(capi-appfw-app-manager)
+BuildRequires:  pkgconfig(capi-security-privilege-manager)
+BuildRequires:  pkgconfig(capi-system-device)
 BuildRequires:	pkgconfig(aul)
+BuildRequires:  pkgconfig(openssl)
+BuildRequires:  pkgconfig(minizip)
 BuildRequires:  gettext-tools
 Requires:  /bin/cpio
 
 %description
 Native rpm installer
+
+Requires(post): pkgmgr
 
 %prep
 %setup -q
@@ -70,8 +72,10 @@ mkdir -p /usr/etc/package-manager/backend
 mkdir -p /usr/etc/package-manager/backendlib
 mkdir -p /opt/share/packages/.pkgmgr/rpm-installer/
 
+ln -sf /usr/bin/rpm-backend /usr/etc/package-manager/backend/coretpk
 ln -sf /usr/bin/rpm-backend /usr/etc/package-manager/backend/rpm
 ln -sf /usr/lib/libnativerpm.so /usr/etc/package-manager/backendlib/librpm.so
+ln -sf /usr/lib/libnativerpm.so /usr/etc/package-manager/backendlib/libcoretpk.so
 
 chmod 700 /usr/bin/rpm-backend
 
@@ -94,14 +98,12 @@ vconftool set -t int db/private/rpm-installer/requestinfo/options "0" -f -s syst
 %attr(0700,-,-) /usr/bin/upgrade_rpm_package_with_dbpath_rw.sh
 %attr(0700,-,-) /usr/bin/cpio_rpm_package.sh
 %attr(0700,-,-) /usr/bin/cpio_rpm_package_update_xml.sh
-%attr(0700,-,-) /usr/bin/post_script_rpm.sh
+%attr(0700,-,-) /usr/bin/coretpk_ro_xml_converter.sh
+%attr(0700,-,-) /usr/bin/coretpk_rw_xml_converter.sh
+%attr(0700,-,-) /usr/bin/coretpk_category_converter.sh
+%attr(0700,-,-) /usr/bin/rpm_update_xml.sh
 %attr(0744,-,-) /usr/etc/rpm-installer-config.ini
-%attr(0644,-,-) /usr/share/locale/en_GB/LC_MESSAGES/rpm-installer.mo
-%attr(0644,-,-) /usr/share/locale/ja_JP/LC_MESSAGES/rpm-installer.mo
-%attr(0644,-,-) /usr/share/locale/zh_CN/LC_MESSAGES/rpm-installer.mo
-%attr(0644,-,-) /usr/share/locale/en_US/LC_MESSAGES/rpm-installer.mo
-%attr(0644,-,-) /usr/share/locale/ko_KR/LC_MESSAGES/rpm-installer.mo
+%attr(0744,-,-) /usr/etc/coretpk-installer-config.ini
 %attr(0644,-,-) /usr/lib/libnativerpm.so
 %attr(0755,-,-) /opt/share/packages/.pkgmgr/rpm-installer/rpm_installer_deactvation_list.txt
 /usr/share/license/%{name}
-

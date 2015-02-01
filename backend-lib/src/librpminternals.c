@@ -36,60 +36,9 @@
 #include <rpmts.h>
 #include <rpmdb.h>
 #include <rpmlog.h>
+
 #include "librpminternals.h"
-
-/* This is backend lib's filter string for dlogutil*/
-#define LOCAL_LOG_TAG	 "librpm"
-int logging = 0x0004;
-#ifdef LOG_IN_FILE
-#define RPM_INSTALLER_LIBRPM_LOG_FILE "/tmp/librpm"
-FILE *logfile = NULL;
-#endif
-
-void _librpm_print_msg(int type, int exetype, char *format, ...)
-{
-	char buffer[FILENAME_MAX] = { 0 };
-	char tbuffer[FILENAME_MAX] = { 0 };
-
-	va_list args;
-	va_start(args, format);
-	vsnprintf(tbuffer, FILENAME_MAX, format, args);
-	va_end(args);
-
-	switch (type) {
-	case DEBUG_ERR:
-		LOG(LOG_ERROR, LOCAL_LOG_TAG, "%s", tbuffer);
-		break;
-	case DEBUG_RESULT:
-		LOG(LOG_WARN, LOCAL_LOG_TAG, "%s", tbuffer);
-		break;
-	case DEBUG_INFO:
-		LOG(LOG_DEBUG, LOCAL_LOG_TAG, "%s", tbuffer);
-	default:
-		break;
-	}
-
-	if (logging == 0)
-		return;
-
-	if (DEBUG_ERR == (logging & type)) {
-		snprintf(buffer, FILENAME_MAX, "ERROR:%s", tbuffer);
-		vfprintf(stderr, format, args);
-	} else if (DEBUG_INFO == (logging & type)) {
-		snprintf(buffer, FILENAME_MAX, "INFO:%s", tbuffer);
-		vfprintf(stdout, format, args);
-	} else if (DEBUG_RESULT == (logging & type)) {
-		snprintf(buffer, FILENAME_MAX, "RESULT:%s", tbuffer);
-		vfprintf(stdout, format, args);
-	} else {
-		return;
-	}
-
-#ifdef LOG_IN_FILE
-	if (logfile != NULL)
-		fwrite(buffer, sizeof(char), strlen(buffer), logfile);
-#endif				/*LOG_IN_FILE */
-}
+#include "rpm-installer-util.h"
 
 int _librpm_app_is_installed(const char *pkgid)
 {
@@ -105,12 +54,12 @@ int _librpm_app_is_installed(const char *pkgid)
 	}
 
 	if (found == 0) {
-		_librpm_print(DEBUG_INFO, "Package not found in DB\n");
+		_LOGD("Package not found in DB\n");
 		ret = 0;
 		goto err;
 	}
 	else {
-		 _librpm_print(DEBUG_INFO, "Package found in DB\n");
+		 _LOGD("Package found in DB\n");
                 ret = 1;
 		goto err;
 	}
@@ -145,7 +94,7 @@ int _librpm_get_installed_package_info(const char *pkgid,
 
 	/*Print the header info */
         if (found == 0) {
-                _librpm_print(DEBUG_ERR, "Package not found in DB\n");
+                _LOGE("Package not found in DB\n");
                 ret = LIBRPM_ERROR;
 		goto err;
         }
@@ -193,7 +142,7 @@ int _librpm_get_package_header_info(const char *pkg_path,
 
 	fd = Fopen(pkg_path, "r.ufdio");
 	if ((!fd) || Ferror(fd)) {
-		_librpm_print(DEBUG_ERR, "Failed to open package file (%s)\n", Fstrerror(fd));
+		_LOGE("Failed to open package file (%s)\n", Fstrerror(fd));
 		ret = LIBRPM_ERROR;
 		goto err;
 	}
@@ -209,7 +158,7 @@ int _librpm_get_package_header_info(const char *pkg_path,
 
 	rc = rpmReadPackageFile(ts, fd, pkg_path, &hdr);
 	if (rc != RPMRC_OK) {
-		_librpm_print(DEBUG_ERR, "Could not read package file\n");
+		_LOGE("Could not read package file\n");
 		ret = LIBRPM_ERROR;
 		goto err;
 	}
@@ -251,7 +200,7 @@ long long _librpm_calculate_dir_size(const char *dirname)
 	struct stat fileinfo;
 	char abs_filename[FILENAME_MAX] = { 0, };
 	if (dirname == NULL) {
-		_librpm_print(DEBUG_ERR,
+		_LOGE(
 				"dirname is NULL");
 		return LIBRPM_ERROR;
 	}
@@ -289,7 +238,7 @@ long long _librpm_calculate_dir_size(const char *dirname)
 		}
 		(void)closedir(dp);
 	} else {
-		_librpm_print(DEBUG_ERR,
+		_LOGE(
 			     "Couldn't open the directory\n");
 		return -1;
 	}

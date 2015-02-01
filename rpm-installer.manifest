@@ -14,5 +14,9 @@
 		<filesystem path="/usr/bin/upgrade_rpm_package_with_dbpath_rw.sh" label="_" exec_label="none"/>
 		<filesystem path="/usr/bin/cpio_rpm_package.sh" label="_" exec_label="none"/>
 		<filesystem path="/usr/bin/cpio_rpm_package_update_xml.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/coretpk_ro_xml_converter.sh" label="_" exec_label="none"/>	
+		<filesystem path="/usr/bin/coretpk_rw_xml_converter.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/coretpk_category_converter.sh" label="_" exec_label="none"/>
+		<filesystem path="/usr/bin/rpm_update_xml.sh" label="_" exec_label="none"/>
 	</assign>
 </manifest>

@@ -23,8 +23,6 @@
 #include "rpm-installer-util.h"
 #include "rpm-installer-signature.h"
 
-#define ASCII(s) (const char *)s
-#define XMLCHAR(s) (const xmlChar *)s
 
 static int _ri_next_child_element(xmlTextReaderPtr reader, int depth)
 {
@@ -222,6 +220,9 @@ static void _ri_free_reference(reference_x *reference)
 		        transforms = tmp;
 		}
 	}
+	if(reference->uri)
+		free((void*)reference->uri);
+
 	free((void*)reference);
 	reference = NULL;
 }
@@ -307,24 +308,32 @@ void _ri_free_signature_xml(signature_x *sigx)
 
 static int _ri_process_digestmethod(xmlTextReaderPtr reader, digestmethod_x *digestmethod)
 {
-	if (xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")))
-		digestmethod->algorithm = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")));
-	return 0;
+	int ret = -1;
+	ret = _ri_get_attribute(reader,"Algorithm",&digestmethod->algorithm);
+	if(ret != 0){
+		_LOGE("@Error in getting the attribute value");
+	}
+	return ret;
 }
 
 static int _ri_process_digestvalue(xmlTextReaderPtr reader, digestvalue_x *digestvalue)
 {
 	xmlTextReaderRead(reader);
-	if (xmlTextReaderValue(reader))
-		digestvalue->text = ASCII(xmlTextReaderValue(reader));
+	xmlChar *tmp = NULL;
+	tmp = xmlTextReaderValue(reader);
+	if (tmp)
+		digestvalue->text = ASCII(tmp);
 	return 0;
 }
 
 static int _ri_process_transform(xmlTextReaderPtr reader, transform_x *transform)
 {
-	if (xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")))
-		transform->algorithm = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")));
-	return 0;
+	int ret = -1;
+	ret = _ri_get_attribute(reader,"Algorithm",&transform->algorithm);
+	if(ret != 0){
+		_LOGE("@Error in getting the attribute value");
+	}
+	return ret;
 }
 
 static int _ri_process_transforms(xmlTextReaderPtr reader, transforms_x *transforms)
@@ -338,19 +347,19 @@ static int _ri_process_transforms(xmlTextReaderPtr reader, transforms_x *transfo
 	while ((ret = _ri_next_child_element(reader, depth))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "node is NULL\n");
+			_LOGE("node is NULL\n");
 			return -1;
 		}
 		if (strcmp(ASCII(node), "Transform") == 0) {
 			transform_x *transform = calloc(1, sizeof(transform_x));
 			if (transform == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(transforms->transform, transform);
 			ret = _ri_process_transform(reader, transform);
 		} else {
-			_d_msg(DEBUG_INFO, "Invalid tag %s", ASCII(node));
+			_LOGD("Invalid tag %s", ASCII(node));
 			return -1;
 		}
 		if (ret < 0)
@@ -365,16 +374,22 @@ static int _ri_process_transforms(xmlTextReaderPtr reader, transforms_x *transfo
 
 static int _ri_process_cannonicalizationmethod(xmlTextReaderPtr reader, cannonicalizationmethod_x *cannonicalizationmethod)
 {
-	if (xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")))
-		cannonicalizationmethod->algorithm = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")));
-	return 0;
+	int ret = -1;
+	ret = _ri_get_attribute(reader,"Algorithm",&cannonicalizationmethod->algorithm);
+	if(ret != 0){
+		_LOGE("@Error in getting the attribute value");
+	}
+	return ret;
 }
 
 static int _ri_process_signaturemethod(xmlTextReaderPtr reader, signaturemethod_x *signaturemethod)
 {
-	if (xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")))
-		signaturemethod->algorithm = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("Algorithm")));
-	return 0;
+	int ret = -1;
+	ret = _ri_get_attribute(reader,"Algorithm",&signaturemethod->algorithm);
+	if(ret != 0){
+		_LOGE("@Error in getting the attribute value");
+	}
+	return ret;
 }
 
 static int _ri_process_reference(xmlTextReaderPtr reader, reference_x *reference)
@@ -386,20 +401,23 @@ static int _ri_process_reference(xmlTextReaderPtr reader, reference_x *reference
 	digestvalue_x *tmp2 = NULL;
 	transforms_x *tmp3 = NULL;
 
-	if (xmlTextReaderGetAttribute(reader, XMLCHAR("URI")))
-		reference->uri = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("URI")));
+	ret = _ri_get_attribute(reader,"URI",&reference->uri);
+	if(ret != 0){
+		_LOGE("@Error in getting the attribute value");
+		return -1;
+	}
 
 	depth = xmlTextReaderDepth(reader);
 	while ((ret = _ri_next_child_element(reader, depth))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "node is NULL\n");
+			_LOGE("node is NULL\n");
 			return -1;
 		}
 		if (strcmp(ASCII(node), "DigestMethod") == 0) {
 			digestmethod_x *digestmethod = calloc(1, sizeof(digestmethod_x));
 			if (digestmethod == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(reference->digestmethod, digestmethod);
@@ -407,7 +425,7 @@ static int _ri_process_reference(xmlTextReaderPtr reader, reference_x *reference
 		} else if (strcmp(ASCII(node), "DigestValue") == 0) {
 			digestvalue_x *digestvalue = calloc(1, sizeof(digestvalue_x));
 			if (digestvalue == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(reference->digestvalue, digestvalue);
@@ -415,13 +433,13 @@ static int _ri_process_reference(xmlTextReaderPtr reader, reference_x *reference
 		} else if (strcmp(ASCII(node), "Transforms") == 0) {
 			transforms_x *transforms = calloc(1, sizeof(transforms_x));
 			if (transforms == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(reference->transforms, transforms);
 			ret = _ri_process_transforms(reader, transforms);
 		} else {
-			_d_msg(DEBUG_INFO, "Invalid tag %s", ASCII(node));
+			_LOGD("Invalid tag %s", ASCII(node));
 			return -1;
 		}
 		if (ret < 0)
@@ -445,9 +463,11 @@ static int _ri_process_reference(xmlTextReaderPtr reader, reference_x *reference
 static int _ri_process_x509certificate(xmlTextReaderPtr reader, x509certificate_x *x509certificate)
 {
 	xmlTextReaderRead(reader);
-	if (xmlTextReaderValue(reader)) {
-		x509certificate->text = ASCII(xmlTextReaderValue(reader));
-		_d_msg(DEBUG_INFO, "certlen=%d, x509certificate : %s", strlen(x509certificate->text), x509certificate->text);
+	xmlChar *tmp = NULL;
+	tmp = xmlTextReaderValue(reader);
+	if (tmp) {
+		x509certificate->text = ASCII(tmp);
+		_LOGD("x509certificate, len=[%d]\n%s", strlen(x509certificate->text), x509certificate->text);
 	}
 	return 0;
 }
@@ -463,19 +483,19 @@ static int _ri_process_x509data(xmlTextReaderPtr reader, x509data_x *x509data)
 	while ((ret = _ri_next_child_element(reader, depth))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "node is NULL\n");
+			_LOGE("node is NULL\n");
 			return -1;
 		}
 		if (strcmp(ASCII(node), "X509Certificate") == 0) {
 			x509certificate_x *x509certificate = calloc(1, sizeof(x509certificate_x));
 			if (x509certificate == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(x509data->x509certificate, x509certificate);
 			ret = _ri_process_x509certificate(reader, x509certificate);
 		} else {
-			_d_msg(DEBUG_INFO, "Invalid tag %s", ASCII(node));
+			_LOGD("Invalid tag %s", ASCII(node));
 			return -1;
 		}
 		if (ret < 0)
@@ -507,19 +527,19 @@ static int _ri_process_keyinfo(xmlTextReaderPtr reader, keyinfo_x *keyinfo)
 	while ((ret = _ri_next_child_element(reader, depth))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "node is NULL\n");
+			_LOGE("node is NULL\n");
 			return -1;
 		}
 		if (strcmp(ASCII(node), "X509Data") == 0) {
 			x509data_x *x509data = calloc(1, sizeof(x509data_x));
 			if (x509data == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(keyinfo->x509data, x509data);
 			ret = _ri_process_x509data(reader, x509data);
 		} else {
-			_d_msg(DEBUG_INFO, "Invalid tag %s", ASCII(node));
+			_LOGD("Invalid tag %s", ASCII(node));
 			return -1;
 		}
 		if (ret < 0)
@@ -535,9 +555,11 @@ static int _ri_process_keyinfo(xmlTextReaderPtr reader, keyinfo_x *keyinfo)
 static int _ri_process_signaturevalue(xmlTextReaderPtr reader, signaturevalue_x *signaturevalue)
 {
 	xmlTextReaderRead(reader);
-	if (xmlTextReaderValue(reader)) {
-		signaturevalue->text = ASCII(xmlTextReaderValue(reader));
-		_d_msg(DEBUG_INFO, "siglen=%d SignatureValue %s", strlen(signaturevalue->text), signaturevalue->text);
+	xmlChar *tmp = NULL;
+	tmp = xmlTextReaderValue(reader);
+	if (tmp) {
+		signaturevalue->text = ASCII(tmp);
+		_LOGD("SignatureValue, len=[%d]\n%s", strlen(signaturevalue->text), signaturevalue->text);
 	}
 	return 0;
 }
@@ -555,13 +577,13 @@ static int _ri_process_signedinfo(xmlTextReaderPtr reader, signedinfo_x *signedi
 	while ((ret = _ri_next_child_element(reader, depth))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "node is NULL\n");
+			_LOGE("node is NULL\n");
 			return -1;
 		}
 		if (strcmp(ASCII(node), "CanonicalizationMethod") == 0) {
 			cannonicalizationmethod_x *cannonicalizationmethod = calloc(1, sizeof(cannonicalizationmethod_x));
 			if (cannonicalizationmethod == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(signedinfo->cannonicalizationmethod, cannonicalizationmethod);
@@ -569,7 +591,7 @@ static int _ri_process_signedinfo(xmlTextReaderPtr reader, signedinfo_x *signedi
 		} else if (strcmp(ASCII(node), "SignatureMethod") == 0) {
 			signaturemethod_x *signaturemethod = calloc(1, sizeof(signaturemethod_x));
 			if (signaturemethod == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(signedinfo->signaturemethod, signaturemethod);
@@ -577,13 +599,13 @@ static int _ri_process_signedinfo(xmlTextReaderPtr reader, signedinfo_x *signedi
 		} else if (strcmp(ASCII(node), "Reference") == 0) {
 			reference_x *reference = calloc(1, sizeof(reference_x));
 			if (reference == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(signedinfo->reference, reference);
 			ret = _ri_process_reference(reader, reference);
 		} else {
-			_d_msg(DEBUG_INFO, "Invalid tag %s", ASCII(node));
+			_LOGD("Invalid tag %s", ASCII(node));
 			return -1;
 		}
 		if (ret < 0)
@@ -618,13 +640,13 @@ static int _ri_process_sign(xmlTextReaderPtr reader, signature_x *sigx)
 	while ((ret = _ri_next_child_element(reader, depth))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "node is NULL\n");
+			_LOGE("node is NULL\n");
 			return -1;
 		}
 		if (strcmp(ASCII(node), "SignedInfo") == 0) {
 			signedinfo_x *signedinfo = calloc(1, sizeof(signedinfo_x));
 			if (signedinfo == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(sigx->signedinfo, signedinfo);
@@ -632,7 +654,7 @@ static int _ri_process_sign(xmlTextReaderPtr reader, signature_x *sigx)
 		} else if (strcmp(ASCII(node), "SignatureValue") == 0) {
 			signaturevalue_x *signaturevalue = calloc(1, sizeof(signaturevalue_x));
 			if (signaturevalue == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(sigx->signaturevalue, signaturevalue);
@@ -640,7 +662,7 @@ static int _ri_process_sign(xmlTextReaderPtr reader, signature_x *sigx)
 		} else if (strcmp(ASCII(node), "KeyInfo") == 0) {
 			keyinfo_x *keyinfo = calloc(1, sizeof(keyinfo_x));
 			if (keyinfo == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(sigx->keyinfo, keyinfo);
@@ -649,7 +671,7 @@ static int _ri_process_sign(xmlTextReaderPtr reader, signature_x *sigx)
 			/*
 			object_x *object = calloc(1, sizeof(object_x));
 			if (object == NULL) {
-				_d_msg(DEBUG_ERR, "Calloc Failed\n");
+				_LOGE("Calloc Failed\n");
 				return -1;
 			}
 			LISTADD(sigx->object, object);
@@ -657,7 +679,7 @@ static int _ri_process_sign(xmlTextReaderPtr reader, signature_x *sigx)
 			*/
 			continue;
 		} else {
-			_d_msg(DEBUG_INFO, "Invalid tag %s", ASCII(node));
+			_LOGD("Invalid tag %s", ASCII(node));
 			return -1;
 		}
 		if (ret < 0)
@@ -690,17 +712,25 @@ static int _ri_process_signature(xmlTextReaderPtr reader, signature_x *sigx)
 	if ((ret = _ri_next_child_element(reader, -1))) {
 		node = xmlTextReaderConstName(reader);
 		if (!node) {
-			_d_msg(DEBUG_ERR, "Node is null");
+			_LOGE("Node is null");
 			return -1;
 		}
 		if (!strcmp(ASCII(node), "Signature")) {
-			if (xmlTextReaderGetAttribute(reader, XMLCHAR("Id")))
-				sigx->id = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("Id")));
-			if (xmlTextReaderGetAttribute(reader, XMLCHAR("xmlns")))
-				sigx->xmlns = ASCII(xmlTextReaderGetAttribute(reader, XMLCHAR("xmlns")));
+			ret = _ri_get_attribute(reader,"Id",&sigx->id);
+			if(ret != 0){
+				_LOGE("@Error in getting the attribute value");
+				return -1;
+			}
+
+			ret = _ri_get_attribute(reader,"xmlns",&sigx->xmlns);
+			if(ret != 0){
+				_LOGE("@Error in getting the attribute value");
+				return -1;
+			}
+
 			ret = _ri_process_sign(reader, sigx);
 		} else {
-			_d_msg(DEBUG_ERR, "No Signature element found\n");
+			_LOGE("No Signature element found\n");
 			return -1;
 		}
 	}
@@ -719,17 +749,17 @@ signature_x *_ri_process_signature_xml(const char *signature_file)
 		if (sigx) {
 			if (_ri_process_signature(reader, sigx) < 0) {
 				/* error in parsing. Let's display some hint where we failed */
-				_d_msg(DEBUG_ERR, "Syntax error in processing signature in the above line\n");
+				_LOGE("Syntax error in processing signature in the above line\n");
 				_ri_free_signature_xml(sigx);
 				xmlFreeTextReader(reader);
 				return NULL;
 			}
 		} else {
-			_d_msg(DEBUG_ERR, "Calloc failed\n");
+			_LOGE("Calloc failed\n");
 		}
 		xmlFreeTextReader(reader);
 	} else {
-		_d_msg(DEBUG_ERR, "Unable to create xml reader\n");
+		_LOGE("Unable to create xml reader\n");
 	}
 	return sigx;
 }

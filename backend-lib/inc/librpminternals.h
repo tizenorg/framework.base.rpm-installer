@@ -44,12 +44,6 @@ extern "C" {
 #define LIKELY(expr) __builtin_expect((expr), 1)
 #define UNLIKELY(expr) __builtin_expect((expr), 0)
 
-void _librpm_print_msg(int type, int exetype, char *format, ...);
-#define _librpm_print(type, fmtstr, args...) { \
-_librpm_print_msg(type, LIBRPM_LOG, "%s():%d: " fmtstr, \
-__func__, __LINE__, ##args); \
-}
-
 int _librpm_get_package_header_info(const char *pkg_path,
 			package_manager_pkg_detail_info_t *pkg_detail_info);
 int _librpm_get_installed_package_info(const char *pkgid,

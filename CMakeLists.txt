@@ -23,7 +23,5 @@ INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/rpm_installer_deactvation_list.txt DES
 ## build comm libraries
 add_subdirectory(common)
 add_subdirectory(frontend)
-add_subdirectory(po)
 add_subdirectory(backend-lib)
 ##################
-

@@ -10,32 +10,28 @@ set(CMAKE_SKIP_BUILD_RPATH true)
 INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/inc ${CMAKE_SOURCE_DIR}/backend/inc ${CMAKE_SOURCE_DIR}/backend/src/inc ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 
 INCLUDE(FindPkgConfig)
-pkg_check_modules(pkgs REQUIRED pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server security-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util elementary appcore-efl libxml-2.0 app2sd cert-svc 
-xmlsec1 libprivilege-control capi-appfw-app-manager aul)
+pkg_check_modules(pkgs REQUIRED pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server security-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util libxml-2.0 app2sd cert-svc
+xmlsec1 libprivilege-control capi-appfw-app-manager aul capi-security-privilege-manager capi-system-device minizip)
 
 FOREACH(flag ${pkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
 
-pkg_check_modules(libpkgs REQUIRED security-server pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util elementary appcore-efl libxml-2.0 app2sd cert-svc 
-xmlsec1 libprivilege-control capi-appfw-app-manager aul)
+pkg_check_modules(libpkgs REQUIRED security-server pkgmgr pkgmgr-installer pkgmgr-parser pkgmgr-info pkgmgr-installer-status-broadcast-server vconf sqlite3 dbus-glib-1 glib-2.0 db-util libxml-2.0 app2sd cert-svc
+xmlsec1 libprivilege-control capi-appfw-app-manager aul capi-security-privilege-manager capi-system-device minizip)
 
 FOREACH(flag ${libpkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
 
 pkg_check_modules(STATUS pkgmgr-installer-status-broadcast-server pkgmgr pkgmgr-installer pkgmgr-parser libxml-2.0 app2sd pkgmgr-info cert-svc 
-xmlsec1 libprivilege-control capi-appfw-app-manager aul)
+xmlsec1 libprivilege-control capi-appfw-app-manager aul capi-security-privilege-manager capi-system-device minizip)
 link_directories (${STATUS_LIBRARY_DIRS})
 include_directories (${STATUS_INCLUDE_DIRS})
 
 pkg_check_modules(COMMCLIENT pkgmgr-installer-client)
 link_directories (${COMMCLIENT_LIBRARY_DIRS})
 include_directories (${COMMCLIENT_INCLUDE_DIRS})
-
-pkg_check_modules(APPCODEEFL appcore-efl evas ecore edje ecore-input ecore-x)
-link_directories (${APPCODEEFL_LIBRARY_DIRS})
-include_directories (${APPCODEEFL_INCLUDE_DIRS})
 
 pkg_check_modules(SECURITYSERVER security-server)
 link_directories (${SECURITYSERVER_LIBRARY_DIRS})
@@ -52,8 +48,10 @@ find_library(RPM_LIBRARY rpm "/usr/lib")
 
 
 SET(backend_dir "${CMAKE_CURRENT_SOURCE_DIR}/../backend")
-SET(backend_inc_dir "${backend_dir}/include")
+SET(backend_inc_dir "${backend_dir}/inc")
 SET(backend_c_src_dir "${backend_dir}/src")
+SET(backend_c_src_rpm_inc_dir "${backend_dir}/src/rpm/inc")
+SET(backend_c_src_coretpk_inc_dir "${backend_dir}/src/coretpk/inc")
 SET(backend_script_dir "${backend_dir}/scripts")
 SET(SCRIPTS_DIR "${backend_script_dir}")
 
@@ -72,9 +70,14 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 
 ####################################################################################################
 ## for rpm-backend (binary)
-SET(rpm-backend_SOURCES ${backend_c_src_dir}/core/rpm-installer-core.c ${backend_c_src_dir}/core/rpm-installer-tool.c ${backend_c_src_dir}/rpm/rpm-installer.c ${backend_c_src_dir}/rpm/rpm-installer-signature.c ${backend_c_src_dir}/rpm/rpm-installer-privilege.c ${backend_c_src_dir}/vconf/rpm-vconf-intf.c ${frontend_c_src_dir}/rpm-appcore-intf.c  ${frontend_c_src_dir}/rpm-cmdline.c  ${frontend_c_ui_src_dir}/rpm-homeview.c)
+SET(rpm-backend_SOURCES ${backend_c_src_dir}/rpm/rpm-installer-core.c ${backend_c_src_dir}/rpm/rpm-installer-tool.c ${backend_c_src_dir}/rpm/rpm-installer.c
+						${backend_c_src_dir}/rpm/rpm-installer-signature.c ${backend_c_src_dir}/rpm/rpm-installer-privilege.c
+						${backend_c_src_dir}/coretpk/coretpk-installer.c
+						${backend_c_src_dir}/coretpk/xml-parser/coretpk-parser-hybrid.c
+						${backend_c_src_dir}/vconf/rpm-vconf-intf.c
+						${frontend_c_src_dir}/rpm-appcore-intf.c  ${frontend_c_src_dir}/rpm-cmdline.c  )
 
-SET(rpm-backend_CFLAGS " -I. -I/usr/include/rpm -I${backend_inc_dir} -I${frontend_inc_dir} -I${frontend_c_ui_inc_dir} ${pkg_CFLAGS}")
+SET(rpm-backend_CFLAGS " -I. -I/usr/include/rpm -I${backend_inc_dir} -I${backend_c_src_rpm_inc_dir} -I${backend_c_src_coretpk_inc_dir} -I${frontend_inc_dir} -I${frontend_c_ui_inc_dir} ${pkg_CFLAGS}")
 SET(rpm-backend_LDFLAGS ${pkgs_LDFLAGS})
 
 ADD_EXECUTABLE(rpm-backend ${rpm-backend_SOURCES})
@@ -108,7 +111,10 @@ configure_file(${backend_script_dir}/upgrade_rpm_package_with_dbpath_rw.sh.in ${
 configure_file(${backend_script_dir}/query_rpm_package.sh.in ${CMAKE_CURRENT_BINARY_DIR}/query_rpm_package.sh @ONLY)
 configure_file(${backend_script_dir}/cpio_rpm_package.sh.in ${CMAKE_CURRENT_BINARY_DIR}/cpio_rpm_package.sh @ONLY)
 configure_file(${backend_script_dir}/cpio_rpm_package_update_xml.sh.in ${CMAKE_CURRENT_BINARY_DIR}/cpio_rpm_package_update_xml.sh @ONLY)
-configure_file(${backend_script_dir}/post_script_rpm.sh.in ${CMAKE_CURRENT_BINARY_DIR}/post_script_rpm.sh @ONLY)
+configure_file(${backend_script_dir}/rpm_update_xml.sh.in ${CMAKE_CURRENT_BINARY_DIR}/rpm_update_xml.sh @ONLY)
+configure_file(${backend_script_dir}/coretpk_ro_xml_converter.sh.in ${CMAKE_CURRENT_BINARY_DIR}/coretpk_ro_xml_converter.sh @ONLY)
+configure_file(${backend_script_dir}/coretpk_rw_xml_converter.sh.in ${CMAKE_CURRENT_BINARY_DIR}/coretpk_rw_xml_converter.sh @ONLY)
+configure_file(${backend_script_dir}/coretpk_category_converter.sh.in ${CMAKE_CURRENT_BINARY_DIR}/coretpk_category_converter.sh @ONLY)
 
 INSTALL(FILES
                 ${CMAKE_CURRENT_BINARY_DIR}/install_rpm_package.sh
@@ -121,10 +127,13 @@ INSTALL(FILES
                 ${CMAKE_CURRENT_BINARY_DIR}/query_rpm_package.sh
                 ${CMAKE_CURRENT_BINARY_DIR}/cpio_rpm_package.sh
                 ${CMAKE_CURRENT_BINARY_DIR}/cpio_rpm_package_update_xml.sh
-                ${CMAKE_CURRENT_BINARY_DIR}/post_script_rpm.sh
+                ${CMAKE_CURRENT_BINARY_DIR}/rpm_update_xml.sh
+                ${CMAKE_CURRENT_BINARY_DIR}/coretpk_ro_xml_converter.sh
+                ${CMAKE_CURRENT_BINARY_DIR}/coretpk_rw_xml_converter.sh
+                ${CMAKE_CURRENT_BINARY_DIR}/coretpk_category_converter.sh
                 DESTINATION bin)
 
-
 INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/rpm-installer-config.ini DESTINATION /usr/etc)
+INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/coretpk-installer-config.ini DESTINATION /usr/etc)
 INSTALL(TARGETS rpm-backend DESTINATION bin PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_WRITE)
 

@@ -20,18 +20,22 @@
  *
  */
 
-#ifndef HOME_VIEW_H_
-#define HOME_VIEW_H_
+#ifndef __RPM_INSTALLER_PRIVILEGE_H_
+#define __RPM_INSTALLER_PRIVILEGE_H_
 
-void _ri_information_popup(Evas_Smart_Cb func, const char *output,
-			   void *user_param);
-void _ri_package_downgrade_popup(Evas_Smart_Cb func1, Evas_Smart_Cb func2, const char *output,
-				 void *user_param);
-Eina_Bool _ri_init_appdata(struct appdata *ad);
-Eina_Bool _ri_init_home_view(struct appdata *ad);
-void _ri_destroy_home_view(struct appdata *ad);
-int _ri_frontend_launch_main_view(struct appdata *data);
-void _ri_frontend_update_progress_info(struct appdata *data,
-				       char *progressinfo);
+#ifdef __cplusplus
+extern "C" {
+#endif				/* __cplusplus */
 
-#endif				/* HOME_VIEW_H_ */
+int _ri_privilege_register_package(const char *pkgid);
+int _ri_privilege_unregister_package(const char *pkgid);
+int _ri_privilege_revoke_permissions(const char *pkgid);
+int _ri_privilege_enable_permissions(const char *pkgid, int apptype, const char **perms, int persistent);
+int _ri_privilege_setup_path(const char *pkgid, const char *dirpath, int apppathtype, const char *groupid);
+int _ri_privilege_add_friend(const char *pkgid1, const char *pkgid2);
+int _ri_privilege_change_smack_label(const char *path, const char *label,	int label_type);
+
+#ifdef __cplusplus
+}
+#endif				/* __cplusplus */
+#endif				/* __RPM_INSTALLER_PRIVILEGE_H_ */

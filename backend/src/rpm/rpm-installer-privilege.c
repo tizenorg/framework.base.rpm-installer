@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <privilege-control.h>
+#include "sys/smack.h"
 
 #include "rpm-installer.h"
 
@@ -40,7 +41,7 @@ static int __ri_privilege_perm_begin(void)
 	int ret = 0;
 
 	ret = perm_begin();
-	_d_msg(DEBUG_INFO, "[smack] perm_begin, result = [%d]",ret);
+	_LOGD("[smack] perm_begin, result=[%d]",ret);
 
 	return ret;
 }
@@ -50,7 +51,7 @@ static int __ri_privilege_perm_end(void)
 	int ret = 0;
 
 	ret = perm_end();
-	_d_msg(DEBUG_INFO, "[smack] perm_end, result = [%d]",ret);
+	_LOGD("[smack] perm_end, result=[%d]",ret);
 
 	return ret;
 }
@@ -60,7 +61,7 @@ int _ri_privilege_register_package(const char *pkgid)
 	int ret = 0;
 
 	ret = perm_app_install(pkgid);
-	_d_msg(DEBUG_INFO, "[smack] app_install(%s), result = [%d]", pkgid, ret);
+	_LOGD("[smack] app_install(%s), result=[%d]", pkgid, ret);
 
 	return ret;
 }
@@ -70,7 +71,7 @@ int _ri_privilege_unregister_package(const char *pkgid)
 	int ret = 0;
 
 	ret = perm_app_uninstall(pkgid);
-	_d_msg(DEBUG_INFO, "[smack] app_uninstall(%s), result = [%d]", pkgid, ret);
+	_LOGD("[smack] app_uninstall(%s), result=[%d]", pkgid, ret);
 
 	return ret;
 }
@@ -80,7 +81,7 @@ int _ri_privilege_revoke_permissions(const char *pkgid)
 	int ret = 0;
 
 	ret = perm_app_revoke_permissions(pkgid);
-	_d_msg(DEBUG_INFO, "[smack] app_revoke_permissions(%s), result = [%d]", pkgid, ret);
+	_LOGD("[smack] app_revoke_permissions(%s), result=[%d]", pkgid, ret);
 
 	return ret;
 }
@@ -93,24 +94,23 @@ int _ri_privilege_enable_permissions(const char *pkgid, int apptype,
 	__ri_privilege_perm_begin();
 
 	ret = perm_app_enable_permissions(pkgid, apptype, perms, persistent);
-	_d_msg(DEBUG_INFO, "[smack] app_enable_permissions(%s, %d), result = [%d]", pkgid, apptype, ret);
+	_LOGD("[smack] app_enable_permissions(%s, %d), result=[%d]", pkgid, apptype, ret);
 
 	__ri_privilege_perm_end();
 
 	return ret;
 }
 
-int _ri_privilege_setup_path(const char *pkgid, const char *dirpath,
-						int apppathtype, const char *groupid)
+int _ri_privilege_setup_path(const char *pkgid, const char *dirpath, int apppathtype, const char *groupid)
 {
 	int ret = 0;
 
 	if (groupid == NULL) {
 		ret = perm_app_setup_path(pkgid, dirpath, apppathtype);
-		_d_msg(DEBUG_INFO, "[smack] app_setup_path(%s), result = [%d]", dirpath,ret);
+		_LOGD("[smack] app_setup_path(%s, %s, %d), result=[%d]", pkgid, dirpath, apppathtype, ret);
 	} else {
 		ret = perm_app_setup_path(pkgid, dirpath, apppathtype, groupid);
-		_d_msg(DEBUG_INFO, "[smack] app_setup_path(%s), result = [%d]", dirpath, ret);
+		_LOGD("[smack] app_setup_path(%s, %s, %d, %s), result=[%d]", pkgid, dirpath, apppathtype, groupid, ret);
 	}
 
 	return ret;
@@ -121,7 +121,7 @@ int _ri_privilege_add_friend(const char *pkgid1, const char *pkgid2)
 	int ret = 0;
 
 	ret = perm_app_add_friend(pkgid1, pkgid2);
-	_d_msg(DEBUG_INFO, "[smack] app_add_friend(%s, %s), result = [%d]", pkgid1, pkgid2, ret);
+	_LOGD("[smack] app_add_friend(%s, %s), result=[%d]", pkgid1, pkgid2, ret);
 
 	return ret;
 }
@@ -134,7 +134,7 @@ int _ri_privilege_change_smack_label(const char *path, const char *label,
 	int ret = 0;
 
 	ret = smack_lsetlabel(path, label, label_type);
-	_d_msg(DEBUG_INFO, "[smack] smack_lsetlabel(%s, %s, %d), result = [%d]", path, label, label_type, ret);
+	_LOGD("[smack] smack_lsetlabel(%s, %s, %d), result=[%d]", path, label, label_type, ret);
 
 	return ret;
 }

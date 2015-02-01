@@ -34,21 +34,28 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <glib.h>
+#include <dirent.h>
 #include <ctype.h>		/* for isspace () */
+#include <wctype.h>		/* for towlower() */
 #include <vconf.h>
 #include <cert-service.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
+#include <sqlite3.h>
+#include <db-util.h>
+#include <sys/xattr.h>
+
 #ifndef XMLSEC_NO_XSLT
 #include <libxslt/xslt.h>
 #include <libxslt/security.h>
 #endif
+
 #include <xmlsec/xmlsec.h>
 #include <xmlsec/xmltree.h>
 #include <xmlsec/xmldsig.h>
 #include <xmlsec/crypto.h>
+#include <xmlsec/errors.h>
 #include <pkgmgr-info.h>
 #include <pkgmgr_parser.h>
 #include <package-manager.h>
@@ -56,66 +63,18 @@
 #include <app_manager.h>
 #include <aul.h>
 #include <dlfcn.h>
+#define APP2EXT_ENABLE
+#ifdef APP2EXT_ENABLE
+#include <app2ext_interface.h>
+#endif
 
 #include "rpm-installer-util.h"
 #include "rpm-installer-signature.h"
 #include "rpm-installer.h"
 #include "rpm-frontend.h"
 #include "rpm-installer-type.h"
+#include "coretpk-installer-internal.h"
 
-#define PRE_CHECK_FOR_MANIFEST
-#define POST_SCRIPT	"/usr/bin/post_script_rpm.sh"
-#define INSTALL_SCRIPT	"/usr/bin/install_rpm_package.sh"
-#define INSTALL_SCRIPT_WITH_DBPATH_RO		"/usr/bin/install_rpm_package_with_dbpath_ro.sh"
-#define INSTALL_SCRIPT_WITH_DBPATH_RW		"/usr/bin/install_rpm_package_with_dbpath_rw.sh"
-#define UNINSTALL_SCRIPT	"/usr/bin/uninstall_rpm_package.sh"
-#define UPGRADE_SCRIPT	"/usr/bin/upgrade_rpm_package.sh"
-#define UPGRADE_SCRIPT_WITH_DBPATH_RO		"/usr/bin/upgrade_rpm_package_with_dbpath_ro.sh"
-#define UPGRADE_SCRIPT_WITH_DBPATH_RW		"/usr/bin/upgrade_rpm_package_with_dbpath_rw.sh"
-#define TEMP_DBPATH "/opt/usr/rpmdb_tmp"
-
-#define RPM2CPIO	"/usr/bin/rpm2cpio"
-#define SIGNATURE1_XML		"signature1.xml"
-#define SIGNATURE2_XML		"signature2.xml"
-#define AUTHOR_SIGNATURE_XML		"author-signature.xml"
-#define USR_APPS			"/usr/apps"
-#define OPT_USR_APPS			"/opt/usr/apps"
-#define OPT_SHARE_PACKAGES "/opt/share/packages"
-#define USR_SHARE_PACKAGES "/usr/share/packages"
-#define DEACTIVATION_PKGID_LIST "/opt/share/packages/.pkgmgr/rpm-installer/rpm_installer_deactvation_list.txt"
-
-#define OPT_ZIP_FILE	 		"/usr/system/RestoreDir/opt.zip"
-
-#define EFLWGT_TYPE_STR			"eflwgt"
-
-#define TOKEN_PACKAGE_STR	"package="
-#define TOKEN_PKGID_STR		"pkgid="
-#define TOKEN_STATE_STR		"state="
-#define TOKEN_PATH_STR		"path="
-#define TOKEN_OPERATION_STR	"op="
-#define TOKEN_REMOVE_STR	"removable="
-#define SEPERATOR_END		':'
-#define SEPERATOR_START		'"'
-
-#define APP_OWNER_ID		5000
-#define APP_GROUP_ID		5000
-#define MAX_BUFF_LEN		4096
-#define MAX_CERT_NUM		9
-#define TERMINATE_RETRY_COUNT 100
-
-#define ASC_CHAR(s) (const char *)s
-#define XML_CHAR(s) (const xmlChar *)s
-
-#define BIN_DIR_STR			"bin"
-#define RES_DIR_STR			"res"
-#define SHARED_RES_DIR_STR	"shared/res"
-#define LIBAIL_PATH "/usr/lib/libail.so.0"
-
-enum rpm_request_type {
-	INSTALL_REQ,
-	UNINSTALL_REQ,
-	UPGRADE_REQ,
-};
 
 enum rpm_sig_type {
 	SIG_AUTH,
@@ -135,24 +94,16 @@ typedef struct cert_chain_t {
 } cert_chain;
 
 cert_chain list[MAX_CERT_NUM];
+GList *privilege_list;
 
-#define APP2EXT_ENABLE
-#ifdef APP2EXT_ENABLE
-#include <app2ext_interface.h>
-#endif
+#define PKGMGR_DB		"/opt/dbspace/.pkgmgr_parser.db"
+#define EXT_APPDATA_PRIVILEGE_NAME 	"http://tizen.org/privilege/externalstorage.appdata"
 
-typedef enum rpm_request_type rpm_request_type;
 extern char *gpkgname;
 extern int sig_enable;
 
-static int __rpm_xsystem(const char *argv[]);
 static void __rpm_process_line(char *line);
 static void __rpm_perform_read(int fd);
-static void __rpm_clear_dir_list(GList* dir_list);
-static GList * __rpm_populate_dir_list();
-static int __rpm_delete_dir(char *dirname);
-static int __is_dir(char *dirname);
-static void __rpm_apply_shared_privileges(char *pkgname, int flag);
 static int __ri_xmlsec_verify_signature(const char *sigxmlfile, char *rootca);
 static xmlSecKeysMngrPtr __ri_load_trusted_certs(char *files, int files_size);
 static int __ri_verify_file(xmlSecKeysMngrPtr mngr, const char *sigxmlfile);
@@ -164,6 +115,7 @@ static char *__ri_get_str(const char* str, const char* pKey);
 static void __ri_xmlsec_debug_print(const char* file, int line, const char* func,
 									const char* errorObject, const char* errorSubject, int reason, const char* msg);
 
+int _ri_set_group_id(const char *pkgid, const char *groupid);
 
 static void __str_trim(char *input)
 {
@@ -193,7 +145,7 @@ static int __ri_check_pkgid_for_deactivation(const char *pkgid)
 
 	fp = fopen(DEACTIVATION_PKGID_LIST, "r");
 	if (fp == NULL) {
-		_d_msg(DEBUG_ERR, "fopen fail\n");
+		_LOGE("fopen fail\n");
 		return 0;
 	}
 
@@ -214,7 +166,7 @@ static int __ri_check_pkgid_for_deactivation(const char *pkgid)
 			fclose(fp);
 			free(deactivation_pkgid);
 			free(deactivation_state);
-			_d_msg(DEBUG_ERR, "Find pkgid[%s] form deactivation list.\n", pkgid);
+			_LOGE("Find pkgid[%s] form deactivation list.\n", pkgid);
 			return -1;
 		}
 
@@ -252,23 +204,53 @@ static char *__ri_get_str(const char* str, const char* pKey)
 		return NULL;
 
 	char *pBuf = strdup(str);
+	if(!pBuf){
+		_LOGE("Malloc failed !");
+		return NULL;
+	}
 
 	p = strstr(pBuf, pKey);
-	if (p == NULL)
+	if (p == NULL){
+		if(pBuf){
+			free(pBuf);
+			pBuf = NULL;
+		}
 		return NULL;
+	}
 
 	pStart = p + strlen(pKey);
 	pEnd = strchr(pStart, SEPERATOR_END);
-	if (pEnd == NULL)
-		return false;
-
+	if (pEnd == NULL){
+		if(pBuf){
+			free(pBuf);
+			pBuf = NULL;
+		}
+		return NULL;
+	}
 	size_t len = pEnd - pStart;
-	if (len <= 0)
-		return false;
-
+	if (len <= 0){
+		if(pBuf){
+			free(pBuf);
+			pBuf = NULL;
+		}
+		return NULL;
+	}
 	char *pRes = (char*)malloc(len + 1);
+	if(!pRes){
+		if(pBuf){
+			free(pBuf);
+			pBuf = NULL;
+		}
+		_LOGE("Malloc failed!");
+		return NULL;
+	}
 	strncpy(pRes, pStart, len);
 	pRes[len] = 0;
+
+	if(pBuf){
+		free(pBuf);
+		pBuf = NULL;
+	}
 
 	return pRes;
 }
@@ -295,7 +277,7 @@ static int __ri_create_cert_chain(int sigtype, int sigsubtype, char *value)
 {
 	if (value == NULL)
 		return -1;
-	_d_msg(DEBUG_INFO, "Push in list [%d] [%d] [%s]", sigtype, sigsubtype, value);
+	// _LOGD("Push in list [%d] [%d] [%s]", sigtype, sigsubtype, value);
 	switch (sigtype) {
 	case SIG_AUTH:
 		switch (sigsubtype) {
@@ -376,9 +358,9 @@ static void __ri_xmlsec_debug_print(const char* file, int line, const char* func
 	snprintf(total, sizeof(total), "[%s(%d)] : [%s] : [%s] : [%s]", func, line, errorObject, errorSubject, msg);
 	if(reason != 256) {
 		fprintf(stderr, "## [validate error]: %s\n", total);
-		_d_msg(DEBUG_ERR,"%s",total);
+		_LOGE("%s",total);
 	} else {
-		_d_msg(DEBUG_ERR,"%s",total);
+		_LOGE("%s",total);
 	}
 }
 
@@ -399,33 +381,33 @@ static int __ri_verify_file(xmlSecKeysMngrPtr sec_key_mngr, const char *sigxmlfi
 	/* load file */
 	doc = xmlParseFile(sigxmlfile);
 	if ((doc == NULL) || (xmlDocGetRootElement(doc) == NULL)) {
-		_d_msg(DEBUG_ERR, "unable to parse file \"%s\"\n", sigxmlfile);
+		_LOGE("unable to parse file \"%s\"\n", sigxmlfile);
 		goto err;
 	}
 	/* find start node */
 	node = xmlSecFindNode(xmlDocGetRootElement(doc), xmlSecNodeSignature, xmlSecDSigNs);
 	if (node == NULL) {
-		_d_msg(DEBUG_ERR, "start node not found in \"%s\"\n", sigxmlfile);
+		_LOGE("start node not found in \"%s\"\n", sigxmlfile);
 		goto err;
 	}
 	/* create signature context */
 	dsigCtx = xmlSecDSigCtxCreate(sec_key_mngr);
 	if (dsigCtx == NULL) {
-		_d_msg(DEBUG_ERR, "failed to create signature context\n");
+		_LOGE("failed to create signature context\n");
 		goto err;
 	}
 	/* Verify signature */
 	if (xmlSecDSigCtxVerify(dsigCtx, node) < 0) {
-		_d_msg(DEBUG_ERR, "failed to verify signature\n");
+		_LOGE("failed to verify signature\n");
 		goto err;
 	}
 	/* print verification result to stdout */
 	if (dsigCtx->status == xmlSecDSigStatusSucceeded) {
 		res = 0;
-		_d_msg(DEBUG_INFO, "Signature VALID");
+		_LOGD("valid signature");
 	} else {
 		res = -1;
-		_d_msg(DEBUG_INFO, "Signature INVALID");
+		_LOGD("invalid signature");
 	}
 
 err:
@@ -448,17 +430,17 @@ static xmlSecKeysMngrPtr __ri_load_trusted_certs(char *files, int files_size)
 		return NULL;
 	sec_key_mngr = xmlSecKeysMngrCreate();
 	if (sec_key_mngr == NULL) {
-		_d_msg(DEBUG_ERR, "failed to create keys manager.\n");
+		_LOGE("failed to create keys manager.\n");
 		return NULL;
 	}
 	if (xmlSecCryptoAppDefaultKeysMngrInit(sec_key_mngr) < 0) {
-		_d_msg(DEBUG_ERR, "failed to initialize keys manager.\n");
+		_LOGE("failed to initialize keys manager.\n");
 		xmlSecKeysMngrDestroy(sec_key_mngr);
 		return NULL;
 	}
 	/* load trusted cert */
 	if (xmlSecCryptoAppKeysMngrCertLoad(sec_key_mngr, files, xmlSecKeyDataFormatPem, xmlSecKeyDataTypeTrusted) < 0) {
-		_d_msg(DEBUG_ERR, "failed to load pem certificate from \"%s\"\n", files);
+		_LOGE("failed to load pem certificate from \"%s\"\n", files);
 		xmlSecKeysMngrDestroy(sec_key_mngr);
 		return NULL;
 	}
@@ -469,7 +451,6 @@ static int __ri_xmlsec_verify_signature(const char *sigxmlfile, char *rootca)
 {
 	int ret = 0;
 	xmlSecKeysMngrPtr sec_key_mngr = NULL;
-	xmlInitParser();
 	xmlLoadExtDtdDefaultValue = XML_DETECT_IDS | XML_COMPLETE_ATTRS;
 	xmlSubstituteEntitiesDefault(1);
 
@@ -486,36 +467,36 @@ static int __ri_xmlsec_verify_signature(const char *sigxmlfile, char *rootca)
 
 	ret = xmlSecInit();
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "xmlsec initialization failed [%d]\n", ret);
+		_LOGE("xmlsec initialization failed [%d]\n", ret);
 		goto end;
 	}
 	ret = xmlSecCheckVersion();
 	if (ret != 1) {
-		_d_msg(DEBUG_ERR, "Incompatible version of loaded xmlsec library [%d]\n", ret);
+		_LOGE("Incompatible version of loaded xmlsec library [%d]\n", ret);
 		goto end;
 	}
 #ifdef XMLSEC_CRYPTO_DYNAMIC_LOADING
 	ret = xmlSecCryptoDLLoadLibrary(BAD_CAST "openssl");
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "unable to load openssl library [%d]\n", ret);
+		_LOGE("unable to load openssl library [%d]\n", ret);
 		goto end;
 	}
 #endif
 
 	ret = xmlSecCryptoAppInit(NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "crypto initialization failed [%d]\n", ret);
+		_LOGE("crypto initialization failed [%d]\n", ret);
 		goto end;
 	}
 	ret = xmlSecCryptoInit();
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "xmlsec-crypto initialization failed [%d]\n", ret);
+		_LOGE("xmlsec-crypto initialization failed [%d]\n", ret);
 		goto end;
 	}
 
 	sec_key_mngr = __ri_load_trusted_certs(rootca, 1);
 	if (sec_key_mngr == NULL) {
-		_d_msg(DEBUG_ERR, "loading of trusted certs failed\n");
+		_LOGE("loading of trusted certs failed\n");
 		ret = -1;
 		goto end;
 	}
@@ -534,69 +515,258 @@ end:
 	xsltFreeSecurityPrefs(sec_prefs);
 	xsltCleanupGlobals();
 #endif
-	xmlCleanupParser();
 	return ret;
 }
 
-static void __rpm_apply_shared_privileges(char *pkgname, int flag)
+int _rpm_installer_get_group_id(char *pkgid, char **result)
+{
+	int ret = 0;
+	const char *value = NULL;
+	char author_signature[BUF_SIZE] = {'\0'};
+	char *e_rootcert = NULL;
+	char *d_rootcert = NULL;
+	gsize d_size = 0;
+	unsigned char hashout[BUF_SIZE] = {'\0'};
+	unsigned int h_size = 0;
+	int e_size = 0;
+	int length = 0;
+	pkgmgrinfo_certinfo_h handle = NULL;
+
+	snprintf(author_signature, BUF_SIZE, "%s/%s/%s", USR_APPS, pkgid, AUTHOR_SIGNATURE_XML);
+	if (access(author_signature, F_OK) != 0) {
+		_LOGE("[%s] isn't existed.", author_signature);
+		return -1;
+	}
+
+	ret = pkgmgrinfo_pkginfo_create_certinfo(&handle);
+	if (ret < 0) {
+		_LOGE("pkgmgrinfo_pkginfo_create_certinfo(%s) failed.", pkgid);
+		goto err;
+	}
+
+	ret = pkgmgrinfo_pkginfo_load_certinfo(pkgid, handle);
+	if (ret < 0) {
+		_LOGE("pkgmgrinfo_pkginfo_load_certinfo(%s) failed.", pkgid);
+		goto err;
+	}
+
+	// get root certificate
+	ret = pkgmgrinfo_pkginfo_get_cert_value(handle, PMINFO_AUTHOR_SIGNER_CERT, &value);
+	if (ret < 0 || value == NULL) {
+		_LOGE("pkgmgrinfo_pkginfo_get_cert_value(%s) failed. [%d]", pkgid, ret);
+		goto err;
+	}
+
+	// decode cert
+	d_rootcert = (char *)g_base64_decode(value, &d_size);
+	if (d_rootcert == NULL)	{
+		_LOGE("g_base64_decode() failed.");
+		goto err;
+	}
+	_LOGD("g_base64_decode() succeed, d_size=[%d]", d_size);
+
+	// hash
+	EVP_Digest(d_rootcert, d_size, hashout, &h_size, EVP_sha1(), NULL);
+	if (h_size <= 0) {
+		_LOGE("EVP_Digest(hash) failed.");
+		goto err;
+	}
+	_LOGD("EVP_Digest() succeed, h_size=[%d]", h_size);
+
+	// encode cert
+	e_rootcert = g_base64_encode((const guchar *)hashout, h_size);
+	if (e_rootcert == NULL) {
+		_LOGE("g_base64_encode() failed.");
+		goto err;
+	}
+	e_size = strlen(e_rootcert);
+	_LOGD("g_base64_encode() succeed, e_size=[%d]", e_size);
+
+	// replace / to #
+	for (length = e_size; length >= 0; --length) {
+		if (e_rootcert[length] == '/') {
+			e_rootcert[length] = '#';
+		}
+	}
+
+	*result = e_rootcert;
+
+err:
+	if (d_rootcert) {
+		free(d_rootcert);
+	}
+
+	// destroy cert
+	if (handle) {
+		pkgmgrinfo_pkginfo_destroy_certinfo(handle);
+	}
+
+	return ret;
+}
+
+void __rpm_apply_smack(char *pkgname, int flag)
 {
 	int ret = -1;
-	char buf[BUF_SIZE] = {'\0'};
 	char dirpath[BUF_SIZE] = {'\0'};
+	char* groupid = NULL;
+	char *shared_data_label = NULL;
+
 	/*execute privilege APIs. The APIs should not fail*/
 	_ri_privilege_register_package(pkgname);
 
 	/*home dir. Dont setup path but change smack access to "_" */
-	snprintf(dirpath, BUF_SIZE, "/usr/apps/%s", pkgname);
+	snprintf(dirpath, BUF_SIZE, "%s/%s", USR_APPS, pkgname);
 	if (__is_dir(dirpath))
 		_ri_privilege_change_smack_label(dirpath, "_", 0);/*0 is SMACK_LABEL_ACCESS*/
 	memset(dirpath, '\0', BUF_SIZE);
-	snprintf(dirpath, BUF_SIZE, "/opt/usr/apps/%s", pkgname);
+	snprintf(dirpath, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgname);
 	if (__is_dir(dirpath))
 		_ri_privilege_change_smack_label(dirpath, "_", 0);/*0 is SMACK_LABEL_ACCESS*/
+
+	// data
+	memset(dirpath, '\0', BUF_SIZE);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/data", OPT_USR_APPS, pkgname);
+	if (__is_dir(dirpath))
+		_ri_privilege_setup_path(pkgname, dirpath, APP_PATH_PRIVATE, pkgname);
+
+	// cache
+	memset(dirpath, '\0', BUF_SIZE);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/cache", OPT_USR_APPS, pkgname);
+	if (!__is_dir(dirpath)) {
+		ret = mkdir(dirpath, DIRECTORY_PERMISSION_755);
+		if (ret < 0) {
+			_LOGE("directory making is failed.\n");
+		}
+	}
+	ret = chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+	if(ret != 0){
+		_LOGE("chown failed!! [%s]",strerror(errno));
+	}
+	_ri_privilege_setup_path(pkgname, dirpath, APP_PATH_PRIVATE, pkgname);
+
+	//shared
+	memset(dirpath, '\0', BUF_SIZE);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared", USR_APPS, pkgname);
+	if (__is_dir(dirpath))
+		_ri_privilege_change_smack_label(dirpath, "_", 0);/*0 is SMACK_LABEL_ACCESS*/
+	memset(dirpath, '\0', BUF_SIZE);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared", OPT_USR_APPS, pkgname);
+	if (!__is_dir(dirpath))
+		ret = mkdir(dirpath, DIRECTORY_PERMISSION_755);
+		if (ret < 0) {
+			_LOGE("directory making is failed.\n");
+		}
+	_ri_privilege_change_smack_label(dirpath, "_", 0);/*0 is SMACK_LABEL_ACCESS*/
 	memset(dirpath, '\0', BUF_SIZE);
 
-	/*/shared dir. Dont setup path but change smack access to "_" */
-	snprintf(dirpath, BUF_SIZE, "/usr/apps/%s/shared", pkgname);
-	if (__is_dir(dirpath))
-		_ri_privilege_change_smack_label(dirpath, "_", 0);/*0 is SMACK_LABEL_ACCESS*/
-	memset(dirpath, '\0', BUF_SIZE);
-	snprintf(dirpath, BUF_SIZE, "/opt/usr/apps/%s/shared", pkgname);
-	if (__is_dir(dirpath))
-		_ri_privilege_change_smack_label(dirpath, "_", 0);/*0 is SMACK_LABEL_ACCESS*/
-	memset(dirpath, '\0', BUF_SIZE);
-
-	/*/shared/res dir. setup path and change smack access to "_" */
-	snprintf(dirpath, BUF_SIZE, "/usr/apps/%s/shared/res", pkgname);
+	//shared/res
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/res", USR_APPS, pkgname);
 	if (__is_dir(dirpath))
 		_ri_privilege_setup_path(pkgname, dirpath, PERM_APP_PATH_ANY_LABEL, "_");
 	memset(dirpath, '\0', BUF_SIZE);
 
-	snprintf(dirpath, BUF_SIZE, "/opt/usr/apps/%s/shared/res", pkgname);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/res", OPT_USR_APPS, pkgname);
 	if (__is_dir(dirpath))
 		_ri_privilege_setup_path(pkgname, dirpath, PERM_APP_PATH_ANY_LABEL, "_");
 	memset(dirpath, '\0', BUF_SIZE);
 
-	/*/shared/data dir. setup path and change group to 'app'*/
-	snprintf(dirpath, BUF_SIZE, "/usr/apps/%s/shared/data", pkgname);
+	//shared/data
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/data", USR_APPS, pkgname);
 	if (__is_dir(dirpath)) {
-		(void)chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+		ret = chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+		if(ret != 0){
+			_LOGE("chown failed!! [%s]",strerror(errno));
+		}
 		_ri_privilege_setup_path(pkgname, dirpath, PERM_APP_PATH_PUBLIC, NULL);
 	}
 	memset(dirpath, '\0', BUF_SIZE);
 
-	snprintf(dirpath, BUF_SIZE, "/opt/usr/apps/%s/shared/data", pkgname);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/data", OPT_USR_APPS, pkgname);
 	if (__is_dir(dirpath)) {
-		(void)chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+		ret = chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+		if(ret != 0){
+			_LOGE("chown failed!! [%s]",strerror(errno));
+		}
 		_ri_privilege_setup_path(pkgname, dirpath, PERM_APP_PATH_PUBLIC, NULL);
+	}
+
+	// shared/cache
+	ret = _coretpk_installer_get_smack_label_access(dirpath, &shared_data_label);
+	if (ret != 0) {
+		_LOGE("_coretpk_installer_apply_directory_policy() failed, appdir=[%s], ret=[%d]", dirpath, ret);
+	}
+	memset(dirpath, '\0', BUF_SIZE);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/cache", OPT_USR_APPS, pkgname);
+	if (!__is_dir(dirpath)) {
+		ret = mkdir(dirpath, DIRECTORY_PERMISSION_755);
+		if (ret < 0) {
+			_LOGE("directory making is failed.\n");
+		}
+	}
+	ret = chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+	if(ret != 0){
+		_LOGE("chown failed!! [%s]",strerror(errno));
+	}
+	ret  = _coretpk_installer_set_smack_label_access(dirpath, shared_data_label);
+	if (ret != 0) {
+		_LOGE("_coretpk_installer_apply_directory_policy() failed, appdir=[%s], ret=[%d]", dirpath, ret);
+	}
+	ret = _coretpk_installer_set_smack_label_transmute(dirpath, "1");
+	if (ret != 0) {
+		_LOGE("_coretpk_installer_apply_directory_policy() failed, appdir=[%s], ret=[%d]", dirpath, ret);
+	}
+
+	/*/shared/trusted/*/
+	memset(dirpath, '\0', BUF_SIZE);
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/trusted", USR_APPS, pkgname);
+	if (__is_dir(dirpath)) {
+		ret = chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+		if(ret != 0){
+			_LOGE("chown failed!! [%s]",strerror(errno));
+		}
+
+		ret = _rpm_installer_get_group_id(pkgname, &groupid);
+		if (ret == 0) {
+			_LOGD("group id for trusted directory is [%s]", groupid);
+			_ri_privilege_setup_path(pkgname, dirpath, APP_PATH_GROUP_RW, groupid);
+			FREE_AND_NULL(groupid);
+		}
+	}
+	memset(dirpath, '\0', BUF_SIZE);
+
+	snprintf(dirpath, BUF_SIZE, "%s/%s/shared/trusted", OPT_USR_APPS, pkgname);
+
+	_LOGD("dirpath [%s]", dirpath);
+
+	ret = _rpm_installer_get_group_id(pkgname, &groupid);
+	if (ret == 0) {
+		if (__is_dir(dirpath) != 1) {
+			_LOGE("dont have [%s]", dirpath);
+
+			ret = mkdir(dirpath, DIRECTORY_PERMISSION_755);
+			if (ret == -1 && errno != EEXIST) {
+				_LOGE("mkdir failed!! [%s]",strerror(errno));
+			}
+		}
+
+		ret = chown(dirpath, APP_OWNER_ID, APP_GROUP_ID);
+		if(ret != 0){
+			_LOGE("chown failed!! [%s]",strerror(errno));
+		}
+
+		_LOGD("group id for trusted directory is [%s]", groupid);
+		_ri_privilege_setup_path(pkgname, dirpath, APP_PATH_GROUP_RW, groupid);
+		_ri_set_group_id(pkgname, groupid);
+
+		FREE_AND_NULL(groupid);
 	}
 }
 
-static int __is_dir(char *dirname)
+int __is_dir(char *dirname)
 {
 	struct stat stFileInfo;
 	if(dirname == NULL) {
-		_d_msg(DEBUG_ERR, "dirname is null\n");
+		_LOGE("dirname is null\n");
 		return -1;
 	}
 
@@ -608,46 +778,6 @@ static int __is_dir(char *dirname)
 	return 0;
 }
 
-static int __rpm_delete_dir(char *dirname)
-{
-	int ret = 0;
-	DIR *dp;
-	struct dirent *ep;
-	char abs_filename[FILENAME_MAX];
-	struct stat stFileInfo;
-	dp = opendir(dirname);
-
-	_d_msg(DEBUG_INFO, "__rpm_delete_dir(%s)\n", dirname);
-
-	if (dp != NULL) {
-		while ((ep = readdir(dp))) {
-			snprintf(abs_filename, FILENAME_MAX, "%s/%s", dirname,
-				 ep->d_name);
-			if (lstat(abs_filename, &stFileInfo) < 0)
-				perror(abs_filename);
-			if (S_ISDIR(stFileInfo.st_mode)) {
-				if (strcmp(ep->d_name, ".") &&
-				    strcmp(ep->d_name, "..")) {
-					__rpm_delete_dir(abs_filename);
-					(void)remove(abs_filename);
-				}
-			} else {
-				(void)remove(abs_filename);
-			}
-		}
-		(void)closedir(dp);
-	} else {
-		_d_msg(DEBUG_ERR, "Couldn't open the directory\n");
-		return -1;
-	}
-	ret = remove(dirname);
-	if (ret < 0)
-		_d_msg(DEBUG_ERR, "remove fail dirname[%s]\n", dirname);
-
-	return 0;
-}
-
-
 static void __rpm_process_line(char *line)
 {
 	char *tok = NULL;
@@ -656,9 +786,10 @@ static void __rpm_process_line(char *line)
 		if (!strncmp(tok, "%%", 2)) {
 			tok = strtok(NULL, " ");
 			if (tok) {
-				_d_msg(DEBUG_INFO, "Install percentage is %s\n",
+				_LOGD("Install percentage is %s\n",
 				       tok);
 				_ri_broadcast_status_notification(gpkgname,
+								  "rpm",
 								  "install_percent",
 								  tok);
 				_ri_stat_cb(gpkgname, "install_percent", tok);
@@ -708,40 +839,8 @@ static void __rpm_perform_read(int fd)
 	buffer_position = buffer + buffer_position - buf_ptr;
 }
 
-static int __ri_xsystem(const char *argv[])
-{
-	int status = 0;
-	pid_t pid;
-	pid = fork();
-	switch (pid) {
-	case -1:
-		perror("fork failed");
-		return -1;
-	case 0:
-		/* child */
-		execvp(argv[0], (char *const *)argv);
-		_exit(-1);
-	default:
-		/* parent */
-		break;
-	}
-	if (waitpid(pid, &status, 0) == -1) {
-		perror("waitpid failed");
-		return -1;
-	}
-	if (WIFSIGNALED(status)) {
-		perror("signal");
-		return -1;
-	}
-	if (!WIFEXITED(status)) {
-		/* shouldn't happen */
-		perror("should not happen");
-		return -1;
-	}
-	return WEXITSTATUS(status);
-}
 
-static int __rpm_xsystem(const char *argv[])
+int _rpm_xsystem(const char *argv[])
 {
 	int err = 0;
 	int status = 0;
@@ -751,7 +850,7 @@ static int __rpm_xsystem(const char *argv[])
 	int fd = 0;
 
 	if (pipe(pipefd) == -1) {
-		_d_msg(DEBUG_ERR, "pipe creation failed\n");
+		_LOGE("pipe creation failed\n");
 		return -1;
 	}
 	/*Read progress info via pipe */
@@ -759,7 +858,7 @@ static int __rpm_xsystem(const char *argv[])
 
 	switch (pid) {
 	case -1:
-		_d_msg(DEBUG_ERR, "fork failed\n");
+		_LOGE("fork failed\n");
 		return -1;
 	case 0:
 		/* child */
@@ -769,18 +868,18 @@ static int __rpm_xsystem(const char *argv[])
 			close(2);
 			fd = dup(pipefd[1]);
 			if (fd < 0) {
-				_d_msg(DEBUG_ERR, "dup failed\n");
+				_LOGE("dup failed\n");
 				_exit(100);
 			}
 
 			result = dup(pipefd[1]);
 			if (result < 0) {
-				_d_msg(DEBUG_ERR, "dup failed\n");
+				_LOGE("dup failed\n");
 				_exit(100);
 			}
 
 			if (execvp(argv[0], (char *const *)argv) == -1) {
-				_d_msg(DEBUG_ERR, "execvp failed\n");
+				_LOGE("execvp failed\n");
 			}
 			_exit(100);
 		}
@@ -795,7 +894,7 @@ static int __rpm_xsystem(const char *argv[])
 		if (err < 0) {
 			if (errno == EINTR)
 				continue;
-			_d_msg(DEBUG_ERR, "waitpid failed\n");
+			_LOGE("waitpid failed\n");
 			close(pipefd[0]);
 			return -1;
 		}
@@ -815,7 +914,7 @@ static int __rpm_xsystem(const char *argv[])
 		else if (select_ret < 0 && errno == EINTR)
 			continue;
 		else if (select_ret < 0) {
-			_d_msg(DEBUG_ERR, "select() returned error\n");
+			_LOGE("select() returned error\n");
 			continue;
 		}
 		if (FD_ISSET(pipefd[0], &rfds))
@@ -840,7 +939,7 @@ static int __rpm_xsystem(const char *argv[])
 	return WEXITSTATUS(status);
 }
 
-static void __rpm_clear_dir_list(GList* dir_list)
+void __rpm_clear_dir_list(GList* dir_list)
 {
 	GList *list = NULL;
 	app2ext_dir_details* dir_detail = NULL;
@@ -851,13 +950,14 @@ static void __rpm_clear_dir_list(GList* dir_list)
 			if (dir_detail && dir_detail->name) {
 				free(dir_detail->name);
 			}
+			g_free(list->data);
 			list = g_list_next(list);
 		}
 		g_list_free(dir_list);
 	}
 }
 
-static GList * __rpm_populate_dir_list()
+GList * __rpm_populate_dir_list()
 {
 	GList *dir_list = NULL;
 	GList *list = NULL;
@@ -898,6 +998,7 @@ FINISH_OFF:
 			if (dir_detail && dir_detail->name) {
 				free(dir_detail->name);
 			}
+			g_free(list->data);
 			list = g_list_next(list);
 		}
 		g_list_free(dir_list);
@@ -919,14 +1020,14 @@ static char *__ri_get_cert_from_file(const char *file)
 	int error = 0;
 
 	if(!(fp_cert = fopen(file, "r"))) {
-		_d_msg(DEBUG_ERR, "[ERR][%s] Fail to open file, [%s]\n", __func__, file);
+		_LOGE("[ERR][%s] Fail to open file, [%s]\n", __func__, file);
 		return NULL;
 	}
 
 	fseek(fp_cert, 0L, SEEK_END);
 
 	if(ftell(fp_cert) < 0) {
-		_d_msg(DEBUG_ERR, "[ERR][%s] Fail to find EOF\n", __func__);
+		_LOGE("[ERR][%s] Fail to find EOF\n", __func__);
 		error = 1;
 		goto err;
 	}
@@ -935,7 +1036,7 @@ static char *__ri_get_cert_from_file(const char *file)
 	fseek(fp_cert, 0L, SEEK_SET);
 
 	if(!(certbuf = (char*)malloc(sizeof(char) * (int)certlen))) {
-		_d_msg(DEBUG_ERR, "[ERR][%s] Fail to allocate memory\n", __func__);
+		_LOGE("[ERR][%s] Fail to allocate memory\n", __func__);
 		error = 1;
 		goto err;
 	}
@@ -956,13 +1057,13 @@ static char *__ri_get_cert_from_file(const char *file)
 
 	cert = (char*)malloc(sizeof(char) * (certwrite+2));
 	if (cert == NULL) {
-		_d_msg(DEBUG_ERR, "[ERR][%s] Fail to allocate memory\n", __func__);
+		_LOGE("[ERR][%s] Fail to allocate memory\n", __func__);
 		error = 1;
 		goto err;
 	}
 	memset(cert, 0x00, certwrite+2);
 	snprintf(cert, certwrite+1, "%s", startcert);
-	_d_msg(DEBUG_INFO, "Root CA : %s", cert);
+	_LOGD("Root CA, len=[%d]\n%s", certwrite, cert);
 
 err:
 	if (certbuf)
@@ -979,40 +1080,44 @@ static int __privilege_func(const char *name, void *user_data)
 	int ret = 0;
 	const char *perm[] = {NULL, NULL};
 	perm[0] = name;
+	int apptype = PERM_APP_TYPE_EFL;
+	privilegeinfo *info = (privilegeinfo*)user_data;
 
-	ret = _ri_privilege_enable_permissions((char *)user_data, 7, perm, 1);
+	_LOGD("package_id = [%s], privilege = [%s]", info->package_id, name);
+	privilege_list = g_list_append(privilege_list, strdup((char*)name));
+
+	if (info->visibility & CERT_SVC_VISIBILITY_PLATFORM) {
+		_LOGD("VISIBILITY_PLATFORM!");
+		apptype = PERM_APP_TYPE_EFL_PLATFORM;
+	} else if ((info->visibility & CERT_SVC_VISIBILITY_PARTNER) ||
+			(info->visibility & CERT_SVC_VISIBILITY_PARTNER_OPERATOR) ||
+			(info->visibility & CERT_SVC_VISIBILITY_PARTNER_MANUFACTURER)) {
+		_LOGD("VISIBILITY_PARTNER!");
+		apptype = PERM_APP_TYPE_EFL_PARTNER;
+	}
+
+	ret = _ri_privilege_enable_permissions((char *)info->package_id, apptype, perm, 1);
 	if(ret < 0) {
-		_d_msg(DEBUG_ERR, "%s enable_permissions[%s] fail \n", user_data, perm);
+		_LOGE("_ri_privilege_enable_permissions(%s, %d) failed.", (char *)info->package_id, apptype);
+		return -1;
 	}
 
+	if (strcmp(name, EXT_APPDATA_PRIVILEGE_NAME) == 0) {
+		_LOGD("it is EXT_APPDATA_PRIVILEGE_NAME");
+		if(_coretpk_installer_make_directory_for_ext((char *)info->package_id) < 0) {
+			_LOGE("make_directory_for_ext failed.");
+		}
+	}
+
+	_LOGD("_ri_privilege_enable_permissions(%s, %d) succeed.", (char *)info->package_id, apptype);
 	return ret;
-}
-
-char* __manifest_to_package(const char* manifest)
-{
-	char *package;
-
-	if(manifest == NULL)
-		return NULL;
-
-	package = strdup(manifest);
-	if(package == NULL)
-		return NULL;
-
-	if (!strstr(package, ".xml")) {
-		_d_msg(DEBUG_ERR, "%s is not a manifest file", manifest);
-		free(package);
-		return NULL;
-	}
-
-	return package;
 }
 
 char *__strlwr(char *str)
 {
 	int i = 0;
 
-	while(*(str+i) != NULL){
+	while(*(str+i) != '\0'){
 		if(*(str+i) >= 65 || *(str+i)<= 90) {
 			*(str+i) = towlower(*(str+i));
 		}
@@ -1031,33 +1136,36 @@ static int __ri_find_xml(char *pkgid, char **rpm_xml)
 	dir = opendir(USR_SHARE_PACKAGES);
 	if (!dir) {
 		if (strerror_r(errno, buf, sizeof(buf)) == 0)
-			_d_msg(DEBUG_ERR, "fota-info : Failed to access the [%s] because %s", USR_SHARE_PACKAGES, buf);
+			_LOGE("fota-info : Failed to access the [%s] because %s", USR_SHARE_PACKAGES, buf);
 		return -1;
 	}
 
 	for (ret = readdir_r(dir, &entry, &result);
 			ret == 0 && result != NULL;
 			ret = readdir_r(dir, &entry, &result)) {
-		char *manifest;
+		char *manifest = NULL;
 
 		if (entry.d_name[0] == '.') continue;
 
-		manifest = __manifest_to_package(entry.d_name);
+		manifest = _manifest_to_package(entry.d_name);
 		if (!manifest) {
-			_d_msg(DEBUG_ERR, "fota-info : Failed to convert file to xml[%s]", entry.d_name);
+			_LOGE("fota-info : Failed to convert file to xml[%s]", entry.d_name);
 			continue;
 		}
 
 		if (strstr(manifest, __strlwr(pkgid))) {
 			snprintf(buf, sizeof(buf), "%s/%s", USR_SHARE_PACKAGES, manifest);
-			_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] find xml[%s]\n", pkgid, buf);
+			_LOGD("fota-info : pkgid[%s] find xml[%s]\n", pkgid, buf);
 			*rpm_xml = strdup(buf);
 			closedir(dir);
+			free(manifest);
 			return 0;
 		}
+
+		free(manifest);
 	}
 
-	_d_msg(DEBUG_ERR, "fota-info : Failed to find xml for pkgid[%s]", pkgid);
+	_LOGE("fota-info : Failed to find xml for pkgid[%s]", pkgid);
 	closedir(dir);
 	return 0;
 }
@@ -1066,81 +1174,86 @@ static int __ri_install_fota(char *pkgid)
 {
 	int ret = 0;
 	char *manifest = NULL;
+	char *temp[] = {"fota=true", NULL};
 
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] start installation\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] start installation\n", pkgid);
 
 	/*if pkgid is one of deactivation, it does not need to install*/
 	ret = __ri_check_pkgid_for_deactivation(pkgid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : pkgid[%s] for deactivation dont need to install.\n", pkgid);
+		_LOGE("fota-info : pkgid[%s] for deactivation dont need to install.\n", pkgid);
 		return ret;
 	}
 
 	/*get manifest*/
 	manifest = pkgmgr_parser_get_manifest_file(pkgid);
 	if (manifest == NULL) {
-		_d_msg(DEBUG_ERR, "fota-info : dont have manefest[pkgid=%s]\n", pkgid);
+		_LOGE("fota-info : dont have manefest[pkgid=%s]\n", pkgid);
 		ret = -1;
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] has manefest[%s]\n", pkgid, manifest);
+	_LOGD("fota-info : pkgid[%s] has manefest[%s]\n", pkgid, manifest);
 
-	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, NULL);
+	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, temp);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : installation fail[manifest=%s]\n", manifest);
+		_LOGE("fota-info : installation fail[manifest=%s]\n", manifest);
 		ret = -1;
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] installation success\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] installation success\n", pkgid);
 
-	__rpm_apply_shared_privileges(pkgid,0);
+	__rpm_apply_smack(pkgid,0);
+	__ri_make_directory(pkgid);
 
-	ret = _ri_apply_perm(pkgid);
+	ret = _ri_apply_privilege(pkgid, 0);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : _ri_apply_perm fail[pkgid=%s]\n", pkgid);
+		_LOGE("fota-info : _ri_apply_privilege fail[pkgid=%s]\n", pkgid);
 		ret = -1;
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] apply smack success\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] apply smack success\n", pkgid);
 
 end:
-	if (manifest)
+	if (manifest){
 		free(manifest);
+		manifest = NULL;
+	}
 
 	return ret;
 }
 
 static int __ri_upgrade_fota(char *pkgid)
 {
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] start upgrade\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] start upgrade\n", pkgid);
 
 	int ret = 0;
 	char *manifest = NULL;
+	char *temp[] = {"fota=true", NULL};
 
 	/*if pkgid is one of deactivation, it does not need to upgrade*/
 	ret = __ri_check_pkgid_for_deactivation(pkgid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : pkgid[%s] for deactivation dont need to install.\n", pkgid);
+		_LOGE("fota-info : pkgid[%s] for deactivation dont need to install.\n", pkgid);
 		return ret;
 	}
 
 	/*get manifest*/
 	manifest = pkgmgr_parser_get_manifest_file(pkgid);
 	if (manifest == NULL) {
-		_d_msg(DEBUG_ERR, "fota-info : dont have manefest[pkgid=%s]\n", pkgid);
+		_LOGE("fota-info : dont have manefest[pkgid=%s]\n", pkgid);
 		ret = -1;
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] has manefest[%s]\n", pkgid, manifest);
+	_LOGD("fota-info : pkgid[%s] has manefest[%s]\n", pkgid, manifest);
 	if (access(manifest, F_OK) != 0) {
-		_d_msg(DEBUG_ERR, "fota-info : can not access[manifest=%s]\n", manifest);
+		_LOGE("fota-info : can not access[manifest=%s]\n", manifest);
 		free(manifest);
 		manifest = NULL;
 
 		/*find xml*/
 		ret = __ri_find_xml(pkgid, &manifest);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "fota-info : can not find xml[pkgid=%s]\n", pkgid);
+			_LOGE("fota-info : can not find xml[pkgid=%s]\n", pkgid);
 			ret = -1;
 			goto end;
 		}
@@ -1150,13 +1263,22 @@ static int __ri_upgrade_fota(char *pkgid)
 		return -1;
 	}
 
-	ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, NULL);
+	ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, temp);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : upgrade fail[manifest=%s]\n", manifest);
+		_LOGE("fota-info : upgrade fail[manifest=%s]\n", manifest);
 		ret = -1;
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] upgrade success\n", pkgid);
+
+	__rpm_apply_smack(pkgid,0);
+	__ri_make_directory(pkgid);
+
+	ret = _ri_apply_privilege(pkgid, 0);
+	if (ret < 0) {
+		_LOGE("fota-info : _ri_apply_privilege fail[pkgid=%s]\n", pkgid);
+	}
+
+	_LOGD("fota-info : pkgid[%s] upgrade success\n", pkgid);
 
 end:
 	if (manifest)
@@ -1167,21 +1289,21 @@ end:
 
 static int __ri_uninstall_fota(char *pkgid)
 {
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] start uninstallation\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] start uninstallation\n", pkgid);
 
 	int ret = 0;
 
 	ret = _ri_privilege_unregister_package(pkgid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : _ri_privilege_unregister_package fail[pkgid=%s]\n", pkgid);
+		_LOGE("fota-info : _ri_privilege_unregister_package fail[pkgid=%s]\n", pkgid);
 	}
 
 	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "fota-info : uninstall fail[manifest=%s]\n", pkgid);
+		_LOGE("fota-info : uninstall fail[manifest=%s]\n", pkgid);
 	}
 
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] uninstall success\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] uninstall success\n", pkgid);
 
 	return ret;
 }
@@ -1206,6 +1328,10 @@ static char * __getvalue(const char* pBuf, const char* pKey)
 		return NULL;
 
 	char *pRes = (char*)malloc(len + 1);
+	if(pRes == NULL){
+		_LOGE("@malloc failed");
+		return NULL;
+	}
 	strncpy(pRes, pStart, len);
 	pRes[len] = 0;
 
@@ -1220,7 +1346,7 @@ static char *__find_rpm_pkgid(const char* manifest)
 
 	fp = fopen(manifest, "r");
 	if (fp == NULL)	{
-		_d_msg(DEBUG_ERR, "csc-info : Fail get : %s\n", manifest);
+		_LOGE("csc-info : Fail get : %s\n", manifest);
 		return NULL;
 	}
 
@@ -1250,13 +1376,13 @@ static int __copy_file( const char *src_path, const char *dst_path)
 
     src = fopen(src_path, "r");
     if( src == NULL) {
-		_d_msg(DEBUG_ERR, "Failed to open(). path=%s, E:%d(%s)", src_path, errno, strerror(errno));
+		_LOGE("Failed to open(). path=%s, E:%d(%s)", src_path, errno, strerror(errno));
         return  -1;
     }
 
     dst = fopen(dst_path, "w");
     if( dst == NULL) {
-		_d_msg(DEBUG_ERR, "Failed to open dst file. file=%s, E:%d(%s)", dst_path, errno, strerror(errno));
+		_LOGE("Failed to open dst file. file=%s, E:%d(%s)", dst_path, errno, strerror(errno));
         fclose(src);
         return  -1;
     }
@@ -1288,10 +1414,10 @@ static int __ri_install_csc(char *path_str, char *remove_str)
 	/*get pkgid from path str*/
 	pkgid = __find_rpm_pkgid(path_str);
 	if (pkgid == NULL) {
-		_d_msg(DEBUG_ERR, "csc-info : fail to find pkgid\n");
+		_LOGE("csc-info : fail to find pkgid\n");
 		return -1;
 	}
-	_d_msg(DEBUG_INFO, "csc-info : find pkgid=[%s] for installation\n", pkgid);
+	_LOGD("csc-info : find pkgid=[%s] for installation\n", pkgid);
 
 	/*find xml name*/
 	token = strtok(path_str, delims);
@@ -1301,23 +1427,23 @@ static int __ri_install_csc(char *path_str, char *remove_str)
 		strncat(xml_name, token, strlen(token));
 		token = strtok(NULL, delims);
 	}
-	_d_msg(DEBUG_INFO, "csc-info : xml name = %s\n", xml_name);
+	_LOGD("csc-info : xml name = %s\n", xml_name);
 
 	/*copy xml to /opt/share/packages*/
 	snprintf(dest_file, sizeof(dest_file), "%s/%s", OPT_SHARE_PACKAGES, xml_name);
 	ret = __copy_file(src_file, dest_file);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "csc-info : xml copy fail(%d)\n", ret);
+		_LOGE("csc-info : xml copy fail(%d)\n", ret);
 	} else {
-		_d_msg(DEBUG_ERR, "csc-info : xml copy success to [%s] \n", dest_file);
+		_LOGE("csc-info : xml copy success to [%s] \n", dest_file);
 	}
 
 	/*remove old pkg info*/
 	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_INFO, "csc-info : fail remove old pkg info\n");
+		_LOGD("csc-info : fail remove old pkg info\n");
 	} else {
-		_d_msg(DEBUG_INFO, "csc-info : success remove old pkg info\n");
+		_LOGD("csc-info : success remove old pkg info\n");
 	}
 
 	/*insert new pkg info*/
@@ -1325,12 +1451,14 @@ static int __ri_install_csc(char *path_str, char *remove_str)
 	snprintf(argv, sizeof(argv), "%s/%s", OPT_SHARE_PACKAGES, xml_name);
 	ret = __ri_init_csc_xml(argv, remove_str);
 	if (ret < 0) {
-		_d_msg(DEBUG_INFO, "csc-info : fail insert db\n");
+		_LOGD("csc-info : fail insert db\n");
 	} else {
-		_d_msg(DEBUG_INFO, "csc-info : success xml name = %s\n", xml_name);
+		_LOGD("csc-info : success xml name = %s\n", xml_name);
 	}
-
-	free(pkgid);
+	if(pkgid){
+		free(pkgid);
+		pkgid = NULL;
+	}
 
 	return 0;
 }
@@ -1340,103 +1468,73 @@ static int __ri_uninstall_csc(char *pkgid)
 	/*remove old pkg info*/
 	int ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_INFO, "csc-info : fail remove old pkg info\n");
+		_LOGD("csc-info : fail remove old pkg info\n");
 	} else {
-		_d_msg(DEBUG_INFO, "csc-info : success remove old pkg info\n");
+		_LOGD("csc-info : success remove old pkg info\n");
 	}
 
 	return 0;
 }
 
-static int __child_element(xmlTextReaderPtr reader, int depth)
-{
-	int ret = xmlTextReaderRead(reader);
-	int cur = xmlTextReaderDepth(reader);
-	while (ret == 1) {
-
-		switch (xmlTextReaderNodeType(reader)) {
-		case XML_READER_TYPE_ELEMENT:
-			if (cur == depth + 1)
-				return 1;
-			break;
-		case XML_READER_TYPE_TEXT:
-			/*text is handled by each function separately*/
-			if (cur == depth + 1)
-				return 0;
-			break;
-		case XML_READER_TYPE_END_ELEMENT:
-			if (cur == depth)
-				return 0;
-			break;
-		default:
-			if (cur <= depth)
-				return 0;
-			break;
-		}
-		ret = xmlTextReaderRead(reader);
-		cur = xmlTextReaderDepth(reader);
-	}
-	return ret;
-}
 
 static int __get_size_from_xml(const char *manifest, int *size)
 {
 	const char *val = NULL;
 	const xmlChar *node;
 	xmlTextReaderPtr reader;
+	int ret = PMINFO_R_OK;
 
 	if(manifest == NULL) {
-		_d_msg(DEBUG_ERR, "Input argument is NULL\n");
+		_LOGE("Input argument is NULL\n");
 		return PMINFO_R_ERROR;
 	}
 
 	if(size == NULL) {
-		_d_msg(DEBUG_ERR, "Argument supplied to hold return value is NULL\n");
+		_LOGE("Argument supplied to hold return value is NULL\n");
 		return PMINFO_R_ERROR;
 	}
 
-	xmlInitParser();
 	reader = xmlReaderForFile(manifest, NULL, 0);
 
 	if (reader){
-		if (__child_element(reader, -1)) {
+		if (_child_element(reader, -1)) {
 			node = xmlTextReaderConstName(reader);
 			if (!node) {
-				_d_msg(DEBUG_ERR, "xmlTextReaderConstName value is NULL\n");
-				xmlFreeTextReader(reader);
-				xmlCleanupParser();
-				return PMINFO_R_ERROR;
+				_LOGE("xmlTextReaderConstName value is NULL\n");
+				ret = PMINFO_R_ERROR;
+				goto end;
 			}
 
-			if (!strcmp(ASC_CHAR(node), "manifest")) {
-				if (xmlTextReaderGetAttribute(reader, XML_CHAR("size")))
-					val = ASC_CHAR(xmlTextReaderGetAttribute(reader, XML_CHAR("size")));
-
+			if (!strcmp(ASCII(node), "manifest")) {
+				ret = _ri_get_attribute(reader,"size",&val);
+				if(ret != 0){
+					_LOGE("@Error in getting the attribute value");
+					ret = PMINFO_R_ERROR;
+					goto end;
+				}
 				if (val) {
 					*size = atoi(val);
+					free((void*)val);
 				} else {
 					*size = 0;
-					_d_msg(DEBUG_ERR, "package size is not specified\n");
-					xmlFreeTextReader(reader);
-					xmlCleanupParser();
-					return PMINFO_R_ERROR;
+					_LOGE("package size is not specified\n");
+					ret =  PMINFO_R_ERROR;
+					goto end;
 				}
 			} else {
-				_d_msg(DEBUG_ERR, "Unable to create xml reader\n");
-				xmlFreeTextReader(reader);
-				xmlCleanupParser();
-				return PMINFO_R_ERROR;
+				_LOGE("Unable to create xml reader\n");
+				ret = PMINFO_R_ERROR;
+				goto end;
 			}
 		}
 	} else {
-		_d_msg(DEBUG_ERR, "xmlReaderForFile value is NULL\n");
-		xmlCleanupParser();
-		return PMINFO_R_ERROR;
+		_LOGE("xmlReaderForFile value is NULL\n");
+		ret =  PMINFO_R_ERROR;
 	}
 
-	xmlFreeTextReader(reader);
-	xmlCleanupParser();
 
+end:
+	xmlFreeTextReader(reader);
 	return PMINFO_R_OK;
 }
 
@@ -1445,33 +1543,36 @@ static int __get_location_from_xml(const char *manifest, pkgmgrinfo_install_loca
 	const char *val = NULL;
 	const xmlChar *node;
 	xmlTextReaderPtr reader;
+	int ret = -1;
 
 	if(manifest == NULL) {
-		_d_msg(DEBUG_ERR, "Input argument is NULL\n");
+		_LOGE("Input argument is NULL\n");
 		return PMINFO_R_ERROR;
 	}
 
 	if(location == NULL) {
-		_d_msg(DEBUG_ERR, "Argument supplied to hold return value is NULL\n");
+		_LOGE("Argument supplied to hold return value is NULL\n");
 		return PMINFO_R_ERROR;
 	}
 
-	xmlInitParser();
 	reader = xmlReaderForFile(manifest, NULL, 0);
 
 	if (reader){
-		if ( __child_element(reader, -1)) {
+		if ( _child_element(reader, -1)) {
 			node = xmlTextReaderConstName(reader);
 			if (!node) {
-				_d_msg(DEBUG_ERR, "xmlTextReaderConstName value is NULL\n");
+				_LOGE("xmlTextReaderConstName value is NULL\n");
 				xmlFreeTextReader(reader);
-				xmlCleanupParser();
 				return PMINFO_R_ERROR;
 			}
 
-			if (!strcmp(ASC_CHAR(node), "manifest")) {
-				if (xmlTextReaderGetAttribute(reader, XML_CHAR("install-location")))
-					val = ASC_CHAR(xmlTextReaderGetAttribute(reader, XML_CHAR("install-location")));
+			if (!strcmp(ASCII(node), "manifest")) {
+				ret = _ri_get_attribute(reader,"install-location",&val);
+				if(ret != 0){
+					_LOGE("@Error in getting the attribute value");
+					xmlFreeTextReader(reader);
+					return PMINFO_R_ERROR;
+				}
 
 				if (val) {
 					if (strcmp(val, "internal-only") == 0)
@@ -1480,27 +1581,25 @@ static int __get_location_from_xml(const char *manifest, pkgmgrinfo_install_loca
 						*location = PMINFO_INSTALL_LOCATION_PREFER_EXTERNAL;
 					else
 						*location = PMINFO_INSTALL_LOCATION_AUTO;
+					free((void*)val);
 				}
 			} else {
-				_d_msg(DEBUG_ERR, "Unable to create xml reader\n");
+				_LOGE("Unable to create xml reader\n");
 				xmlFreeTextReader(reader);
-				xmlCleanupParser();
 				return PMINFO_R_ERROR;
 			}
 		}
 	} else {
-		_d_msg(DEBUG_ERR, "xmlReaderForFile value is NULL\n");
-		xmlCleanupParser();
+		_LOGE("xmlReaderForFile value is NULL\n");
 		return PMINFO_R_ERROR;
 	}
 
 	xmlFreeTextReader(reader);
-	xmlCleanupParser();
 
 	return PMINFO_R_OK;
 }
 
-static char * __get_pkg_path(const char *pkg_path, const char *pkgid)
+static char *__get_pkg_path(const char *pkg_path, const char *pkgid)
 {
 	int ret = 0;
 	char buff[BUF_SIZE] = {'\0'};
@@ -1510,31 +1609,141 @@ static char * __get_pkg_path(const char *pkg_path, const char *pkgid)
 	do {
 		if (__is_dir(buff)) break;
 		memset(buff, '\0', BUF_SIZE);
-		snprintf(buff, BUF_SIZE, "/usr/apps/%s", pkgid);
+		snprintf(buff, BUF_SIZE, "%s/%s", USR_APPS,pkgid);
 		if (__is_dir(buff)) break;
 		memset(buff, '\0', BUF_SIZE);
 		snprintf(buff, BUF_SIZE, "/opt/apps/%s", pkgid);
 		if (__is_dir(buff)) break;
 		memset(buff, '\0', BUF_SIZE);
-		snprintf(buff, BUF_SIZE, "/opt/usr/apps/%s", pkgid);
+		snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS,pkgid);
 		if (__is_dir(buff)) break;
 	} while (0);
 
 	ret = chdir(buff);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "chdir() failed [%s]\n", strerror(errno));
+		_LOGE("chdir(%s) failed. [%s]", buff, strerror(errno));
 		return NULL;
 	}
 
 	real_path = (char *)malloc(strlen(buff) + 1);
 	if (real_path == NULL) {
-		_d_msg(DEBUG_ERR, "Malloc failed!\n");
+		_LOGE("malloc() failed.");
 		return NULL;
 	}
 	memset(real_path, '\0', strlen(buff) + 1);
 	memcpy(real_path, buff, strlen(buff));
 
 	return real_path;
+}
+
+static int __set_label_for_pkg_dir(const char *dirpath, const char* label)
+{
+	int ret = 0;
+	DIR *dir;
+	struct dirent entry;
+	struct dirent *result;
+	char fullpath[BUF_SIZE] = {'\0'};
+
+	if (access(dirpath, F_OK) != 0) {
+		_LOGE("skip! empty dirpath = [%s]", dirpath);
+		return 0;
+	}
+
+	dir = opendir(dirpath);
+	if (!dir) {
+		_LOGE("opendir(%s) failed. [%d][%s]", dirpath, errno, strerror(errno));
+		return -1;
+	}
+
+	if(lsetxattr(dirpath, "security.SMACK64", label, strlen(label), 0)) {
+		_LOGE("error(%d) in setting smack label",errno);
+	}
+
+	for (ret = readdir_r(dir, &entry, &result); ret == 0 && result != NULL; ret = readdir_r(dir, &entry, &result)){
+		if (!strcmp(entry.d_name, ".") ||
+			!strcmp(entry.d_name, "..")) {
+			continue;
+		}
+
+		// sub
+		snprintf(fullpath, BUF_SIZE, "%s/%s", dirpath, entry.d_name);
+		if(lsetxattr(fullpath, "security.SMACK64", label, strlen(label), 0)) {
+			_LOGE("error(%d) in setting smack label",errno);
+		}
+
+
+		// find next dir
+		if (entry.d_type == DT_DIR) {
+			ret = __set_label_for_pkg_dir(fullpath,label);
+			if(ret != 0 ){
+				_LOGE("_coretpk_installer_apply_directory_policy(%s) failed.", fullpath);
+			}
+		}
+		memset(fullpath, '\0', BUF_SIZE);
+	}
+
+	closedir(dir);
+
+	return ret;
+
+}
+
+void _ri_soft_reset(char *pkgid)
+{
+	int ret = 0;
+	char dirpath[PKG_STRING_LEN_MAX] = {'\0'};
+
+	//home
+	snprintf(dirpath, PKG_STRING_LEN_MAX, "%s/%s", OPT_USR_APPS, pkgid);
+	if (access(dirpath, F_OK)==0) {
+		__set_label_for_pkg_dir(dirpath, "_");
+	}
+
+	// data
+	memset(dirpath, '\0', PKG_STRING_LEN_MAX);
+	snprintf(dirpath, PKG_STRING_LEN_MAX, "%s/%s/data", OPT_USR_APPS, pkgid);
+	if (access(dirpath, F_OK)==0) {
+		__set_label_for_pkg_dir(dirpath, pkgid);
+	}
+
+	//shared
+	memset(dirpath, '\0', PKG_STRING_LEN_MAX);
+	snprintf(dirpath, PKG_STRING_LEN_MAX, "%s/%s/shared", OPT_USR_APPS, pkgid);
+	if (access(dirpath, F_OK)==0) {
+		__set_label_for_pkg_dir(dirpath, "_");
+	}
+
+	//shared/res
+	memset(dirpath, '\0', PKG_STRING_LEN_MAX);
+	snprintf(dirpath, PKG_STRING_LEN_MAX, "%s/%s/shared/res", OPT_USR_APPS, pkgid);
+	if (access(dirpath, F_OK)==0) {
+		__set_label_for_pkg_dir(dirpath, "_");
+	}
+
+	//shared/data
+	memset(dirpath, '\0', PKG_STRING_LEN_MAX);
+	snprintf(dirpath, PKG_STRING_LEN_MAX, "%s/%s/shared/data", OPT_USR_APPS, pkgid);
+	if (access(dirpath, F_OK)==0) {
+		__set_label_for_pkg_dir(dirpath, "_");
+	}
+
+	//shared/trusted
+	memset(dirpath, '\0', PKG_STRING_LEN_MAX);
+	snprintf(dirpath, PKG_STRING_LEN_MAX, "%s/%s/shared/trusted", OPT_USR_APPS, pkgid);
+	if (access(dirpath, F_OK)==0) {
+		pkgmgrinfo_pkginfo_h handle = NULL;
+		char *groupid = NULL;
+		ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
+		if (ret != PMINFO_R_OK)
+			return;
+		ret = pkgmgrinfo_pkginfo_get_groupid(handle, &groupid);
+		if (ret == PMINFO_R_OK) {
+			_ri_privilege_setup_path(pkgid, dirpath, APP_PATH_GROUP_RW, groupid);
+		}
+		pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
+	}
+
+	return;
 }
 
 void _ri_register_cert(const char *pkgid)
@@ -1545,13 +1754,13 @@ void _ri_register_cert(const char *pkgid)
 	/* create Handle*/
 	error = pkgmgrinfo_create_certinfo_set_handle(&handle);
 	if (error != 0) {
-		_d_msg(DEBUG_ERR, "Cert handle creation failed. Err:%d", error);
+		_LOGE("Cert handle creation failed. Err:%d", error);
 		__ri_free_cert_chain();
 		return;
 	}
 
 	if (list[SIG_AUTH].cert_value == NULL) {
-		_d_msg(DEBUG_ERR, "pkgid[%s] dont have SIG_AUTH.cert_value ", pkgid);
+		_LOGE("pkgid[%s] dont have SIG_AUTH.cert_value ", pkgid);
 		goto err;
 	}
 
@@ -1560,7 +1769,7 @@ void _ri_register_cert(const char *pkgid)
 		if (list[i].cert_value) {
 			error = pkgmgrinfo_set_cert_value(handle, list[i].cert_type, list[i].cert_value);
 			if (error != 0) {
-				_d_msg(DEBUG_ERR, "pkgmgrinfo_set_cert_value failed. cert type:%d. Err:%d", list[i].cert_type, error);
+				_LOGE("pkgmgrinfo_set_cert_value failed. cert type:%d. Err:%d", list[i].cert_type, error);
 				goto err;
 			}
 		}
@@ -1568,7 +1777,7 @@ void _ri_register_cert(const char *pkgid)
 	/* Save the certificates in cert DB*/
 	error = pkgmgrinfo_save_certinfo(pkgid, handle);
 	if (error != 0) {
-		_d_msg(DEBUG_ERR, "pkgmgrinfo_save_certinfo failed. Err:%d", error);
+		_LOGE("pkgmgrinfo_save_certinfo failed. Err:%d", error);
 		goto err;
 	}
 err:
@@ -1583,15 +1792,14 @@ void _ri_unregister_cert(const char *pkgid)
 	/* Delete the certifictes from cert DB*/
 	error = pkgmgrinfo_delete_certinfo(pkgid);
 	if (error != 0) {
-		_d_msg(DEBUG_ERR, "pkgmgrinfo_delete_certinfo failed. Err:%d", error);
+		_LOGE("pkgmgrinfo_delete_certinfo failed. Err:%d", error);
 		return;
 	}
 }
 
-
-int _ri_verify_sig_and_cert(const char *sigfile)
+int _ri_verify_sig_and_cert(const char *sigfile, int *visibility)
 {
-	char certval[MAX_BUFF_LEN] = { '\0'};
+	char certval[MAX_BUFF_LEN] = {'\0'};
 	int err = 0;
 	int validity = 0;
 	int i = 0;
@@ -1606,9 +1814,10 @@ int _ri_verify_sig_and_cert(const char *sigfile)
 
 	ctx = cert_svc_cert_context_init();
 	if (ctx == NULL) {
-		_d_msg(DEBUG_ERR, "cert_svc_cert_context_init() failed");
+		_LOGE("cert_svc_cert_context_init() failed.");
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
+
 	if (strstr(sigfile, AUTHOR_SIGNATURE_XML))
 		sigtype = SIG_AUTH;
 	else if (strstr(sigfile, SIGNATURE1_XML))
@@ -1616,25 +1825,29 @@ int _ri_verify_sig_and_cert(const char *sigfile)
 	else if (strstr(sigfile, SIGNATURE2_XML))
 		sigtype = SIG_DIST2;
 	else {
-		_d_msg(DEBUG_ERR, "Unsupported Signature type\n");
+		_LOGE("Unsupported signature type! [%s]", sigfile);
 		cert_svc_cert_context_final(ctx);
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
+
 	signx = _ri_process_signature_xml(sigfile);
 	if (signx == NULL) {
-		_d_msg(DEBUG_ERR, "Parsing %s failed", sigfile);
+		_LOGE("_ri_process_signature_xml(%s) failed.", sigfile);
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto end;
 	}
+
 	keyinfo = signx->keyinfo;
 	if ((keyinfo == NULL) || (keyinfo->x509data == NULL) || (keyinfo->x509data->x509certificate == NULL)) {
-		_d_msg(DEBUG_ERR, "Certificates missing in %s", sigfile);
+		_LOGE("keyinfo is invalid. [%s]", sigfile);
 		ret = RPM_INSTALLER_ERR_CERT_INVALID;
 		goto end;
 	}
+
 	x509data = keyinfo->x509data;
 	x509certificate_x *cert = x509data->x509certificate;
-	/*First cert is Signer certificate*/
+
+	// First cert is Signer certificate
 	if (cert->text != NULL) {
 		for (i = 0; i <= (int)strlen(cert->text); i++) {
 			if (cert->text[i] != '\n') {
@@ -1642,22 +1855,25 @@ int _ri_verify_sig_and_cert(const char *sigfile)
 			}
 		}
 		certval[j] = '\0';
-		_d_msg(DEBUG_INFO, " strlen[%d] cert_svc_load_buf_to_context() load %s", strlen(certval), certval);
+
 		err = cert_svc_load_buf_to_context(ctx, (unsigned char*)certval);
 		if (err != 0) {
-			_d_msg(DEBUG_ERR, "cert_svc_load_buf_to_context() failed. cert:%s err:%d", certval, err);
+			_LOGE("cert_svc_load_buf_to_context() failed. cert = [%s], err = [%d]", certval, err);
 			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto end;
 		}
+		// _LOGD("SIG_SIGNER certval = [%d][%s]", strlen(certval), certval);
+
 		err = __ri_create_cert_chain(sigtype, SIG_SIGNER, certval);
 		if (err) {
-			_d_msg(DEBUG_ERR, "Failed to push cert info in list\n");
+			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d], certval = [%s]", sigtype, certval);
 			__ri_free_cert_chain();
 			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto end;
 		}
 	}
-	/*Second cert is Intermediate certificate*/
+
+	// Second cert is Intermediate certificate
 	cert = cert->next;
 	if (cert->text != NULL) {
 		memset(certval, 0x00, MAX_BUFF_LEN);
@@ -1668,63 +1884,80 @@ int _ri_verify_sig_and_cert(const char *sigfile)
 			}
 		}
 		certval[j] = '\0';
-		_d_msg(DEBUG_INFO, " strlen[%d] cert_svc_push_file_into_context() load %s", strlen(certval), certval);
+
 		if (cert->text != NULL) {
 			err = cert_svc_push_buf_into_context(ctx, (unsigned char*)certval);
 			if (err != 0) {
-				_d_msg(DEBUG_ERR, "cert_svc_push_file_into_context() failed. cert:%s err:%d", certval, err);
+				_LOGE("cert_svc_push_buf_into_context() failed. cert = [%s], err = [%d]", certval, err);
 				ret = RPM_INSTALLER_ERR_INTERNAL;
 				goto end;
 			}
 		}
+		// _LOGD("SIG_INTERMEDIATE certval = [%d][%s]", strlen(certval), certval);
+
 		err = __ri_create_cert_chain(sigtype, SIG_INTERMEDIATE, certval);
 		if (err) {
-			_d_msg(DEBUG_ERR, "Failed to push cert info in list\n");
+			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d], certval = [%s]", sigtype, certval);
 			__ri_free_cert_chain();
 			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto end;
 		}
 	} else {
-		_d_msg(DEBUG_ERR, "Invalid CertChain");
+		_LOGE("Invalid CertChain! (cert->text is NULL.)");
 		ret = RPM_INSTALLER_ERR_CERT_INVALID;
 		goto end;
 	}
+
 	err = cert_svc_verify_certificate(ctx, &validity);
 	if (err != 0) {
-		_d_msg(DEBUG_ERR, "cert_svc_verify_certificate() failed");
+		_LOGE("cert_svc_verify_certificate() failed.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "Certificate verification completed. [%d]", validity);
+	_LOGD("cert_svc_verify() is done successfully. validity=[%d]", validity);
+
 	if (validity == 0) {
-		_d_msg(DEBUG_ERR, "Certificate Invalid/Expired");
+		_LOGE("Certificate Invalid/Expired (validity == 0)");
 		ret = RPM_INSTALLER_ERR_CERTCHAIN_VERIFICATION_FAILED;
 		goto end;
 	}
-	/*verify signature*/
-	/*For reference validation, we should be in TEMP_DIR/usr/apps/<pkgid>*/
+
+	// verify signature
+	// For reference validation, we should be in TEMP_DIR/usr/apps/<pkgid>
 	if (ctx->fileNames && ctx->fileNames->filename) {
-		_d_msg(DEBUG_INFO, "Root CA cert is: %s\n", ctx->fileNames->filename);
+		_LOGD("Root CA cert path=[%s]", ctx->fileNames->filename);
+
 		err = __ri_xmlsec_verify_signature(sigfile, ctx->fileNames->filename);
 		if (err < 0) {
-			_d_msg(DEBUG_ERR, "signature validation failed\n");
+			_LOGE("__ri_xmlsec_verify_signature(%s) failed.", sigfile);
 			ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
 			goto end;
 		}
+
 		crt = __ri_get_cert_from_file(ctx->fileNames->filename);
 		err = __ri_create_cert_chain(sigtype, SIG_ROOT, crt);
 		if (err) {
-			_d_msg(DEBUG_ERR, "Failed to push cert info in list\n");
+			_LOGE("__ri_create_cert_chain(%d) failed.", sigtype);
 			__ri_free_cert_chain();
 			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto end;
 		}
+
+		err = cert_svc_get_visibility(ctx, visibility);
+		if (err != 0) {
+			_LOGE("cert_svc_get_visibility() failed. err = [%d]", err);
+			ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
+			goto end;
+		}
+		_LOGD("cert_svc_get_visibility() returns visibility=[%d]", *visibility);
 	} else {
-		_d_msg(DEBUG_ERR, "No Root CA certificate found. Signature validation failed");
+		_LOGE("No Root CA cert found. Signature validation failed.");
 		ret = RPM_INSTALLER_ERR_ROOT_CERT_NOT_FOUND;
 		goto end;
 	}
+
 	ret = 0;
+
 end:
 	cert_svc_cert_context_final(ctx);
 	ctx = NULL;
@@ -1733,93 +1966,170 @@ end:
 	return ret;
 }
 
-static int _ri_verify_signatures(const char *root_path, const char *pkgid)
+int _ri_verify_signatures(const char *root_path, const char *pkgid)
 {
 	int ret = 0;
 	char buff[BUF_SIZE] = {'\0'};
 	char *pkg_path = NULL;
+	int visibility = 0;
 
-	/*check for signature and certificate*/
-	if (sig_enable) {
-		pkg_path = __get_pkg_path(root_path, pkgid);
-		if (pkg_path == NULL) {
-			return 0;
+	_LOGD("root_path=[%s], pkgid=[%s]", root_path, pkgid);
+
+	// check for signature and certificate
+	pkg_path = __get_pkg_path(root_path, pkgid);
+	if (pkg_path == NULL) {
+		_LOGE("__get_pkg_path(%s, %s) failed.", root_path, pkgid);
+		return 0;
+	}
+
+	_LOGD("switched to pkg_path=[%s]", pkg_path);
+
+	// author-signature.xml is mandatory
+	snprintf(buff, BUF_SIZE, "%s/author-signature.xml", pkg_path);
+	if (access(buff, F_OK) == 0) {
+		_LOGD("author-signature.xml, path=[%s]", buff);
+		ret = _ri_verify_sig_and_cert(buff, &visibility);
+		if (ret) {
+			_LOGE("_ri_verify_sig_and_cert(%s) failed.", buff);
+			ret = -1;
+			goto end;
 		}
+		_LOGD("------------------------------------------------------");
+		_LOGD("signature is verified successfully");
+		_LOGD("path=[%s]", buff);
+		_LOGD("------------------------------------------------------");
+	}
+	memset(buff, '\0', BUF_SIZE);
 
-		_d_msg(DEBUG_ERR, "Switched to %s\n", pkg_path);
-
-		/*signature2.xml is optional*/
-		snprintf(buff, BUF_SIZE, "%s/signature2.xml", pkg_path);
-		if (access(buff, F_OK) == 0) {
-			_d_msg(DEBUG_INFO, "signature2.xml found in %s\n", pkg_path);
-			ret = _ri_verify_sig_and_cert(buff);
-			if (ret) {
-				_d_msg(DEBUG_ERR, "Failed to verify [%s]\n", buff);
-				ret = -1;
-				goto end;
-			}
-			_d_msg(DEBUG_INFO, "Successfully verified [%s]\n", buff);
+	// signature2.xml is optional
+	snprintf(buff, BUF_SIZE, "%s/signature2.xml", pkg_path);
+	if (access(buff, F_OK) == 0) {
+		_LOGD("signature2.xml found. [%s]", pkg_path);
+		ret = _ri_verify_sig_and_cert(buff, &visibility);
+		if (ret) {
+			_LOGE("_ri_verify_sig_and_cert(%s) failed.", buff);
+			ret = -1;
+			goto end;
 		}
-		memset(buff, '\0', BUF_SIZE);
+		_LOGD("_ri_verify_sig_and_cert(%s) succeed.", buff);
+	}
+	memset(buff, '\0', BUF_SIZE);
 
-		/*signature1.xml is mandatory*/
-		snprintf(buff, BUF_SIZE, "%s/signature1.xml", pkg_path);
-		if (access(buff, F_OK) == 0) {
-			_d_msg(DEBUG_INFO, "signature1.xml found in %s\n", pkg_path);
-			ret = _ri_verify_sig_and_cert(buff);
-			if (ret) {
-				_d_msg(DEBUG_ERR, "Failed to verify [%s]\n", buff);
-				ret = -1;
-				goto end;
-			}
-			_d_msg(DEBUG_INFO, "Successfully verified [%s]\n", buff);
+	// signature1.xml is mandatory
+	snprintf(buff, BUF_SIZE, "%s/signature1.xml", pkg_path);
+	if (access(buff, F_OK) == 0) {
+		_LOGD("signature1.xml, path=[%s]", buff);
+		ret = _ri_verify_sig_and_cert(buff, &visibility);
+		if (ret) {
+			_LOGE("_ri_verify_sig_and_cert(%s) failed.", buff);
+			ret = -1;
+			goto end;
 		}
-		memset(buff, '\0', BUF_SIZE);
+		_LOGD("------------------------------------------------------");
+		_LOGD("signature is verified successfully");
+		_LOGD("path=[%s]", buff);
+		_LOGD("------------------------------------------------------");
+	}
+	memset(buff, '\0', BUF_SIZE);
 
-		/*author-signature.xml is mandatory*/
-		snprintf(buff, BUF_SIZE, "%s/author-signature.xml", pkg_path);
-		if (access(buff, F_OK) == 0) {
-			_d_msg(DEBUG_INFO, "author-signature.xml found in %s\n", pkg_path);
-			ret = _ri_verify_sig_and_cert(buff);
-			if (ret) {
-				_d_msg(DEBUG_ERR, "Failed to verify [%s]\n", buff);
-				ret = -1;
-				goto end;
-			}
-			_d_msg(DEBUG_INFO, "Successfully verified [%s]\n", buff);
-		}
-		memset(buff, '\0', BUF_SIZE);
+	ret = 0;
+
+end :
+	if(pkg_path){
+		free(pkg_path);
+		pkg_path = NULL;
+	}
+
+	if ((ret != 0) && (sig_enable == 0)) {
+		_LOGD("_ri_verify_signatures(%s, %s) failed, but it's ok for config.", root_path, pkgid);
 		ret = 0;
 	}
 
-end :
-	free(pkg_path);
 	return ret;
 }
 
 void _ri_apply_smack(char *pkgname, int flag)
 {
-	__rpm_apply_shared_privileges(pkgname, flag);
+	__rpm_apply_smack(pkgname, flag);
 }
 
-int _ri_apply_perm(char *pkgid)
+int _ri_apply_privilege(char *pkgid, int visibility)
 {
 	int ret = -1;
 	pkgmgrinfo_pkginfo_h handle = NULL;
+	privilegeinfo info;
+	int apptype = PERM_APP_TYPE_EFL;
+
+	memset(&info, '\0', sizeof(info));
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
 	if (ret != PMINFO_R_OK)
 		return -1;
 
-	ret = pkgmgrinfo_pkginfo_foreach_privilege(handle, __privilege_func, (void *)pkgid);
+	strncpy(info.package_id, pkgid, strlen(pkgid));
+	info.visibility = visibility;
+
+	ret = pkgmgrinfo_pkginfo_foreach_privilege(handle, __privilege_func, (void *)&info);
 	if (ret != PMINFO_R_OK) {
-		_d_msg(DEBUG_ERR, "pkgmgrinfo_pkginfo_get_pkgid failed\n");
+		_LOGE("pkgmgrinfo_pkginfo_get_pkgid failed\n");
 		pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
 		return -1;
 	}
 	pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
 
+	if (visibility & CERT_SVC_VISIBILITY_PLATFORM) {
+		_LOGD("VISIBILITY_PLATFORM!");
+		apptype = PERM_APP_TYPE_EFL_PLATFORM;
+	} else if ((visibility & CERT_SVC_VISIBILITY_PARTNER) ||
+			(visibility & CERT_SVC_VISIBILITY_PARTNER_OPERATOR) ||
+			(visibility & CERT_SVC_VISIBILITY_PARTNER_MANUFACTURER)) {
+		_LOGD("VISIBILITY_PARTNER!");
+		apptype = PERM_APP_TYPE_EFL_PARTNER;
+	}
+
+	/*reload privilege*/
+	const char *perm[] = {NULL, NULL};
+	ret = _ri_privilege_enable_permissions(pkgid, apptype, perm, 1);
+
 	return 0;
+}
+
+int _ri_set_group_id(const char *pkgid, const char *groupid)
+{
+	retvm_if(pkgid == NULL, PMINFO_R_EINVAL, "pkgid is NULL\n");
+	retvm_if(groupid == NULL, PMINFO_R_EINVAL, "groupid is NULL\n");
+	int ret = -1;
+	sqlite3 *pkginfo_db = NULL;
+	char *query = NULL;
+
+	/*open db*/
+	ret = db_util_open(PKGMGR_DB, &pkginfo_db, 0);
+	retvm_if(ret != SQLITE_OK, PMINFO_R_ERROR, "connect db [%s] failed!", PKGMGR_DB);
+
+	/*Begin transaction*/
+	ret = sqlite3_exec(pkginfo_db, "BEGIN EXCLUSIVE", NULL, NULL, NULL);
+	tryvm_if(ret != SQLITE_OK, ret = PMINFO_R_ERROR, "Failed to begin transaction\n");
+	_LOGD("Transaction Begin\n");
+
+	query = sqlite3_mprintf("update package_info set package_reserve3=%Q where package=%Q", groupid, pkgid);
+
+	ret = sqlite3_exec(pkginfo_db, query, NULL, NULL, NULL);
+	tryvm_if(ret != SQLITE_OK, ret = PMINFO_R_ERROR, "Don't execute query = %s\n", query);
+
+	/*Commit transaction*/
+	ret = sqlite3_exec(pkginfo_db, "COMMIT", NULL, NULL, NULL);
+	if (ret != SQLITE_OK) {
+		_LOGE("Failed to commit transaction. Rollback now\n");
+		ret = sqlite3_exec(pkginfo_db, "ROLLBACK", NULL, NULL, NULL);
+		tryvm_if(ret != SQLITE_OK, ret = PMINFO_R_ERROR, "Don't execute query = %s\n", query);
+	}
+	_LOGD("Transaction Commit and End\n");
+
+	ret = PMINFO_R_OK;
+catch:
+	sqlite3_free(query);
+	sqlite3_close(pkginfo_db);
+	return ret;
 }
 
 static int __ri_install_fota_for_rw(char *pkgid)
@@ -1828,36 +2138,36 @@ static int __ri_install_fota_for_rw(char *pkgid)
 	int home_dir = 1;
 	char buff[BUF_SIZE] = {'\0'};
 
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] start installation\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] start installation\n", pkgid);
 
 	/*unzip pkg path from factoryrest data*/
 	snprintf(buff, BUF_SIZE, "opt/usr/apps/%s/*", pkgid);
 	const char *pkg_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
-	ret = __ri_xsystem(pkg_argv);
+	ret = _ri_xsystem(pkg_argv);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "fota-info : unzip root path[%s] is fail .\n", buff);
+		_LOGE("fota-info : unzip root path[%s] is fail .\n", buff);
 		return ret;
 	}
 
-	_d_msg(DEBUG_INFO, "fota-info : unzip root path[%s] is success\n", buff);
+	_LOGD("fota-info : unzip root path[%s] is success\n", buff);
 
 	/*unzip manifest from factoryrest data*/
 	memset(buff, '\0', BUF_SIZE);
 	snprintf(buff, BUF_SIZE, "opt/share/packages/%s.xml", pkgid);
 
 	const char *xml_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
-	ret = __ri_xsystem(xml_argv);
+	ret = _ri_xsystem(xml_argv);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "fota-info : xml_argv fail for pkgid[%s] .\n", pkgid);
+		_LOGE("fota-info : xml_argv fail for pkgid[%s] .\n", pkgid);
 		return ret;
 	}
 
-	_d_msg(DEBUG_INFO, "fota-info : xml_argv is success\n", pkgid);
+	_LOGD("fota-info : xml_argv[%s] is success\n", pkgid);
 
 	/*get updated manifest path*/
 	memset(buff, '\0', BUF_SIZE);
 	snprintf(buff, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
-	_d_msg(DEBUG_ERR, "Manifest name is %s\n", buff);
+	_LOGE("Manifest name is %s\n", buff);
 
 	/*apply smack for manifest*/
 	_ri_privilege_change_smack_label(buff, pkgid, 0);/*0 is SMACK_LABEL_ACCESS*/
@@ -1870,12 +2180,15 @@ static int __ri_install_fota_for_rw(char *pkgid)
 
 	ret = pkgmgr_parser_parse_manifest_for_installation(buff, fota_tags);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Parsing Manifest Failed\n");
+		_LOGE("Parsing Manifest Failed\n");
 		ret = -1;
 		goto err;
 	} else {
-		_d_msg(DEBUG_INFO, "Parsing Manifest Success\n");
+		_LOGD("Parsing Manifest Success\n");
 	}
+
+	/*Register cert info*/
+	_ri_register_cert(pkgid);
 
 	/*apply smack for pkg root path*/
 	memset(buff, '\0', BUF_SIZE);
@@ -1883,18 +2196,15 @@ static int __ri_install_fota_for_rw(char *pkgid)
 	_ri_privilege_setup_path(pkgid, buff, PERM_APP_PATH_ANY_LABEL, pkgid);
 
 	/*apply smack for defined directory*/
-	__rpm_apply_shared_privileges(pkgid, home_dir);
+	__rpm_apply_smack(pkgid, home_dir);
 
 	/*apply privilege*/
-	ret = _ri_apply_perm(pkgid);
+	ret = _ri_apply_privilege(pkgid, 0);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "apply perm failed with err(%d)\n", ret);
+		_LOGE("apply perm failed with err(%d)\n", ret);
 	} else {
-		_d_msg(DEBUG_INFO, "apply perm success\n");
+		_LOGD("apply perm success\n");
 	}
-
-	/*Register cert info*/
-	_ri_register_cert(pkgid);
 
 err:
 
@@ -1907,35 +2217,35 @@ static int __ri_upgrade_fota_for_rw(char *pkgid)
 	int home_dir = 1;
 	char buff[BUF_SIZE] = {'\0'};
 
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] start upgrade\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] start upgrade\n", pkgid);
 
 	/*unzip pkg dir from factoryrest data*/
 	snprintf(buff, BUF_SIZE, "opt/usr/apps/%s/*", pkgid);
 	const char *pkg_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
-	ret = __ri_xsystem(pkg_argv);
+	ret = _ri_xsystem(pkg_argv);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "fota-info : unzip root path[%s] is fail .\n", buff);
+		_LOGE("fota-info : unzip root path[%s] is fail .\n", buff);
 		return ret;
 	}
 
-	_d_msg(DEBUG_INFO, "fota-info : unzip root path[%s] is success\n", buff);
+	_LOGD("fota-info : unzip root path[%s] is success\n", buff);
 
 	/*unzip manifest from factoryrest data*/
 	memset(buff, '\0', BUF_SIZE);
 	snprintf(buff, BUF_SIZE, "opt/share/packages/%s.xml", pkgid);
 	const char *xml_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
-	ret = __ri_xsystem(xml_argv);
+	ret = _ri_xsystem(xml_argv);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "fota-info : unzip manifest[%s] is fail .\n", buff);
+		_LOGE("fota-info : unzip manifest[%s] is fail .\n", buff);
 		return ret;
 	}
 
-	_d_msg(DEBUG_INFO, "fota-info : unzip manifest[%s] is success\n", buff);
+	_LOGD("fota-info : unzip manifest[%s] is success\n", buff);
 
 	/*get updated manifest path*/
 	memset(buff, '\0', BUF_SIZE);
 	snprintf(buff, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
-	_d_msg(DEBUG_ERR, "Manifest name is %s\n", buff);
+	_LOGE("Manifest name is %s\n", buff);
 
 	/*apply smack for manifest*/
 	_ri_privilege_change_smack_label(buff, pkgid, 0);/*0 is SMACK_LABEL_ACCESS*/
@@ -1943,12 +2253,16 @@ static int __ri_upgrade_fota_for_rw(char *pkgid)
 	/*register manifest*/
 	ret = pkgmgr_parser_parse_manifest_for_upgrade(buff, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Parsing Manifest Failed\n");
+		_LOGE("Parsing Manifest Failed\n");
 		ret = -1;
 		goto err;
 	} else {
-		_d_msg(DEBUG_INFO, "Parsing Manifest Success\n");
+		_LOGD("Parsing Manifest Success\n");
 	}
+
+	/*Register new cert info*/
+	_ri_unregister_cert(pkgid);
+	_ri_register_cert(pkgid);
 
 	/*apply smack for pkg root path*/
 	memset(buff, '\0', BUF_SIZE);
@@ -1956,19 +2270,15 @@ static int __ri_upgrade_fota_for_rw(char *pkgid)
 	_ri_privilege_setup_path(pkgid, buff, PERM_APP_PATH_ANY_LABEL, pkgid);
 
 	/*apply smack for defined directory*/
-	__rpm_apply_shared_privileges(pkgid, home_dir);
+	__rpm_apply_smack(pkgid, home_dir);
 
 	/*apply privilege*/
-	ret = _ri_apply_perm(pkgid);
+	ret = _ri_apply_privilege(pkgid, 0);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "apply perm failed with err(%d)\n", ret);
+		_LOGE("apply perm failed with err(%d)\n", ret);
 	} else {
-		_d_msg(DEBUG_INFO, "apply perm success\n");
+		_LOGD("apply perm success\n");
 	}
-
-	/*Register new cert info*/
-	_ri_unregister_cert(pkgid);
-	_ri_register_cert(pkgid);
 
 err:
 	return ret;
@@ -1979,13 +2289,13 @@ static int __ri_uninstall_fota_for_rw(char *pkgid)
 	int ret = 0;
 	char buff[BUF_SIZE] = {'\0'};
 
-	_d_msg(DEBUG_INFO, "fota-info : pkgid[%s] start uninstall\n", pkgid);
+	_LOGD("fota-info : pkgid[%s] start uninstall\n", pkgid);
 
 	/*del root path dir*/
 	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
 
 	if (__is_dir(buff)) {
-		__rpm_delete_dir(buff);
+		_rpm_delete_dir(buff);
 	}
 
 	/*del manifest*/
@@ -1996,7 +2306,7 @@ static int __ri_uninstall_fota_for_rw(char *pkgid)
 	/*del db info*/
 	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Parsing Manifest Failed\n");
+		_LOGE("Parsing Manifest Failed\n");
 	}
 
 	/*execute privilege APIs*/
@@ -2012,7 +2322,7 @@ static int __ri_uninstall_fota_for_rw(char *pkgid)
 /**
  * callback for the pkgmgrinfo_appinfo_get_list used in _rpm_uninstall_pkg()
  */
-static int __ri_check_running_app(const pkgmgrinfo_appinfo_h handle, void *user_data)
+int __ri_check_running_app(const pkgmgrinfo_appinfo_h handle, void *user_data)
 {
 	int ret = 0;
 	bool isRunning = 0;
@@ -2021,27 +2331,27 @@ static int __ri_check_running_app(const pkgmgrinfo_appinfo_h handle, void *user_
 
 	ret = pkgmgrinfo_appinfo_get_appid(handle, &appid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to execute pkgmgrinfo_appinfo_get_appid[%d].\n", ret);
+		_LOGE("Failed to execute pkgmgrinfo_appinfo_get_appid[%d].\n", ret);
 		return ret;
 	}
 
 	ret = app_manager_is_running(appid, &isRunning);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to execute app_manager_is_running[%d].\n", ret);
+		_LOGE("Failed to execute app_manager_is_running[%d].\n", ret);
 		return ret;
 	}
-	_d_msg(DEBUG_ERR, "app[%s] , running state[%d].\n", appid, isRunning);
+	_LOGE("app[%s] , running state[%d].\n", appid, isRunning);
 
 	if (isRunning) {
 		ret = app_manager_get_app_context(appid, &appCtx);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "Failed to execute app_manager_get_app_context[%d].\n", ret);
+			_LOGE("Failed to execute app_manager_get_app_context[%d].\n", ret);
 			return ret;
 		}
 
 		ret = app_manager_terminate_app(appCtx);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "Failed to execute app_manager_terminate_app[%d].\n", ret);
+			_LOGE("Failed to execute app_manager_terminate_app[%d].\n", ret);
 			app_context_destroy(appCtx);
 			return ret;
 		}
@@ -2050,23 +2360,23 @@ static int __ri_check_running_app(const pkgmgrinfo_appinfo_h handle, void *user_
 		for (i = 0; i < TERMINATE_RETRY_COUNT; i++) {
 			ret = app_manager_is_running(appid, &isRunning);
 			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "Failed to execute app_manager_is_running[%d].\n", ret);
+				_LOGE("Failed to execute app_manager_is_running[%d].\n", ret);
 				app_context_destroy(appCtx);
 				return ret;
 			}
 
 			if (!isRunning) {
-				_d_msg(DEBUG_INFO, "App(%s) is terminated.\n", appid);
+				_LOGD("App(%s) is terminated.\n", appid);
 				break;
 			} else {
-				_d_msg(DEBUG_INFO, "App(%s) is not terminated yet. wait count = [%d].\n", appid, i);
+				_LOGD("App(%s) is not terminated yet. wait count=[%d].\n", appid, i);
 				usleep(100000);
 			}
 		}
 
 		ret = app_context_destroy(appCtx);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "Failed to execute app_context_destroy[%d].\n", ret);
+			_LOGE("Failed to execute app_context_destroy[%d].\n", ret);
 			return ret;
 		}
 	}
@@ -2074,34 +2384,34 @@ static int __ri_check_running_app(const pkgmgrinfo_appinfo_h handle, void *user_
 	return ret;
 }
 
-static int __ri_change_dir(char *dirname)
+int __ri_change_dir(char *dirname)
 {
 	int ret = 0;
 
 	ret = mkdir(dirname, 0644);
 	if (ret < 0) {
 		if (access(dirname, F_OK) == 0) {
-			__rpm_delete_dir(dirname);
+			_rpm_delete_dir(dirname);
 			ret = mkdir(dirname, 0644);
 			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "mkdir(%s) failed\n", dirname);
+				_LOGE("mkdir(%s) failed\n", dirname);
 				return -1;
 			}
 		} else {
-			_d_msg(DEBUG_ERR, "can not access[%s]\n", dirname);
+			_LOGE("can not access[%s]\n", dirname);
 			return -1;
 		}
 	}
 
 	ret = chdir(dirname);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "chdir(%s) failed [%s]\n", dirname, strerror(errno));
+		_LOGE("chdir(%s) failed [%s]\n", dirname, strerror(errno));
 		return -1;
 	}
 	return 0;
 }
 
-int __ri_smack_reload(const char *pkgid, rpm_request_type request_type)
+int _ri_smack_reload(const char *pkgid, rpm_request_type request_type)
 {
 	int ret = 0;
 	char *op_type = NULL;
@@ -2124,82 +2434,70 @@ int __ri_smack_reload(const char *pkgid, rpm_request_type request_type)
 	}
 
 	if(op_type == NULL) {
-		_d_msg(DEBUG_ERR, "@Failed to reload smack. request_type not matched[pkgid=%s, op=%s]", pkgid, op_type);
+		_LOGE("@Failed to reload smack. request_type not matched[pkgid=%s, op=%s]", pkgid, op_type);
 		return -1;
 	}
 
 	const char *smack_argv[] = { "/usr/bin/smack_reload.sh", op_type, pkgid, NULL };
-	ret = __ri_xsystem(smack_argv);
+	ret = _ri_xsystem(smack_argv);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@Failed to reload smack[pkgid=%s, op=%s].", pkgid, op_type);
+		_LOGE("@Failed to reload smack[pkgid=%s, op=%s].", pkgid, op_type);
 	} else {
-		_d_msg(DEBUG_INFO, "#success: smack reload[pkgid=%s, op=%s]", pkgid, op_type);
+		_LOGD("#success: smack reload[pkgid=%s, op=%s]", pkgid, op_type);
 	}
-	free(op_type);
+	if(op_type){
+		free(op_type);
+		op_type = NULL;
+	}
 	return ret;
 }
 
-static void __ri_post_script(const char *pkgfilepath, const char *pkgid)
+int _ri_smack_reload_all(void)
 {
-	char path_buf[BUF_SIZE] = {'\0'};
+	int ret = 0;
 
-	snprintf(path_buf, BUF_SIZE, "%s/rpm_post_tmp.sh", TEMP_DIR);
-
-	/*pkgfilepath=source rpm file, script_path=post script file from spec*/
-	const char *post_argv[] = { POST_SCRIPT, pkgfilepath, path_buf, NULL };
-	(void)__ri_xsystem(post_argv);
-
-	(void)chmod(path_buf, 0700);
-
-	/*run post script*/
-	const char *script_argv[] = {path_buf, NULL };
-	(void)__ri_xsystem(script_argv);
-
-	(void)remove(path_buf);
-
-	/*if data dir is on root path, apply owner ship as a app, smack label*/
-	memset(path_buf, '\0', BUF_SIZE);
-	snprintf(path_buf, BUF_SIZE, "%s/%s/data", OPT_USR_APPS, pkgid);
-	if (__is_dir(path_buf)) {
-		const char *chown_argv[] = { "/bin/chown", "-cR", "5000:5000", path_buf, NULL };
-		(void)__ri_xsystem(chown_argv);
-		_ri_privilege_change_smack_label(path_buf, pkgid, 0);
+	const char *smack_argv[] = { "/usr/bin/smackload-fast", NULL};
+	ret = _ri_xsystem(smack_argv);
+	if (ret != 0) {
+		_LOGE("@Failed to reload all smack : %d", errno);
+	} else {
+		_LOGD("#success: smack reload all");
 	}
 
-	_d_msg(DEBUG_INFO, "#success: post_script");
+	return ret;
 }
 
-static void __ri_remove_updated_dir(const char *pkgid)
+void __ri_remove_updated_dir(const char *pkgid)
 {
 	char path_buf[BUF_SIZE] = {'\0'};
 
-	/*check pkgid is null*/
+	// check pkgid
 	if (pkgid == NULL) {
-		_d_msg(DEBUG_ERR, "@pkgid is null\n");
+		_LOGE("pkgid is NULL.");
 		return;
 	}
 
-	/*remove bin dir*/
+	// remove bin dir
 	snprintf(path_buf, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, BIN_DIR_STR);
 	if (__is_dir(path_buf)) {
-		_d_msg(DEBUG_ERR, "@pkgid[%s] need to clean dir[%s]\n", pkgid, path_buf);
-		__rpm_delete_dir(path_buf);
+		_LOGE("@pkgid[%s] need to clean dir[%s]\n", pkgid, path_buf);
+		_rpm_delete_dir(path_buf);
 	}
 
-	/*remove res dir*/
+	// remove res dir
 	memset(path_buf, '\0', BUF_SIZE);
 	snprintf(path_buf, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, RES_DIR_STR);
 	if (__is_dir(path_buf)) {
-		_d_msg(DEBUG_ERR, "@pkgid[%s] need to clean dir[%s]\n", pkgid, path_buf);
-		__rpm_delete_dir(path_buf);
+		_LOGE("@pkgid[%s] need to clean dir[%s]\n", pkgid, path_buf);
+		_rpm_delete_dir(path_buf);
 	}
 
-	/*remove shared/res dir*/
+	// remove shared/res dir
 	memset(path_buf, '\0', BUF_SIZE);
 	snprintf(path_buf, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, SHARED_RES_DIR_STR);
 	if (__is_dir(path_buf)) {
-		_d_msg(DEBUG_ERR, "@pkgid[%s] need to clean dir[%s]\n", pkgid, path_buf);
-		__rpm_delete_dir(path_buf);
+		_LOGE("@pkgid[%s] need to clean dir[%s]\n", pkgid, path_buf);
+		_rpm_delete_dir(path_buf);
 	}
 }
 
@@ -2209,38 +2507,38 @@ static int __metadata_func(const char *key, const char *value, void *user_data)
 	bool isRunning = 0;
 
 	if (key == NULL) {
-		_d_msg(DEBUG_ERR, "key is null\n");
+		_LOGE("key is null\n");
 		return -1;
 	}
 	if (value == NULL) {
-		_d_msg(DEBUG_ERR, "value is null\n");
+		_LOGE("value is null\n");
 		return -1;
 	}
 	if (user_data == NULL) {
-		_d_msg(DEBUG_ERR, "user_data is null\n");
+		_LOGE("user_data is null\n");
 		return -1;
 	}
 
 	if ((strcmp(key, "launch-on-attach") == 0) && (strcmp(value, "true") == 0)) {
-		_d_msg(DEBUG_ERR, "consumer[%s] : launch-on-attach is true \n", (char *)user_data);
+		_LOGE("consumer[%s] : launch-on-attach is true \n", (char *)user_data);
 
 		ret = app_manager_is_running((char *)user_data, &isRunning);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "Failed to execute app_manager_is_running[%s].\n", (char *)user_data);
+			_LOGE("Failed to execute app_manager_is_running[%s].\n", (char *)user_data);
 			return ret;
 		}
 
 		if (isRunning) {
-			_d_msg(DEBUG_ERR, "consumer[%s] is already launched \n", (char *)user_data);
+			_LOGE("consumer[%s] is already launched \n", (char *)user_data);
 		} else {
 			usleep(100 * 1000); /* 100ms sleep for infomation ready*/
 			ret = aul_launch_app((char *)user_data, NULL);
 			if (ret == AUL_R_ERROR) {
-				_d_msg(DEBUG_ERR, "consumer[%s] launch fail, sleep and retry  launch_app\n", (char *)user_data);
+				_LOGE("consumer[%s] launch fail, sleep and retry  launch_app\n", (char *)user_data);
 				usleep(100 * 1000);	/* 100ms sleep for infomation ready*/
 				aul_launch_app((char *)user_data, NULL);
 			}
-			_d_msg(DEBUG_ERR, "consumer[%s] is launched !!!! \n", (char *)user_data);
+			_LOGE("consumer[%s] is launched !!!! \n", (char *)user_data);
 		}
 	}
 	return 0;
@@ -2254,21 +2552,21 @@ static int __ri_find_svcapp(const pkgmgrinfo_appinfo_h handle, void *user_data)
 
 	ret = pkgmgrinfo_appinfo_get_component_type(handle, &component_type);
 	if (ret != PMINFO_R_OK) {
-		_d_msg(DEBUG_ERR, "@Failed to get component_type\n");
+		_LOGE("@Failed to get component_type\n");
 		return -1;
 	}
 
-	if (strcmp(component_type, "svcapp") == NULL) {
+	if (strcmp(component_type, "svcapp") == 0) {
 		ret = pkgmgrinfo_appinfo_get_appid(handle, &appid);
 		if (ret != PMINFO_R_OK) {
-			_d_msg(DEBUG_ERR, "@Failed to get appid\n");
+			_LOGE("@Failed to get appid\n");
 			return -1;
 		}
-		_d_msg(DEBUG_ERR, "@find consumer[%s], check metadata for launch\n", appid);
+		_LOGE("@find consumer[%s], check metadata for launch\n", appid);
 
 		ret = pkgmgrinfo_appinfo_foreach_metadata(handle, __metadata_func, (void *)appid);
 		if (ret != PMINFO_R_OK) {
-			_d_msg(DEBUG_ERR, "@Failed to get foreach_metadata\n");
+			_LOGE("@Failed to get foreach_metadata\n");
 			return -1;
 		}
 	}
@@ -2283,19 +2581,16 @@ static void __ri_launch_consumer(const char *pkgid)
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkghandle);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Failed to get pkginfo handle [%s]\n", pkgid);
+		_LOGE("@Failed to get pkginfo handle [%s]\n", pkgid);
 		return;
 	}
 
 	ret = pkgmgrinfo_appinfo_get_list(pkghandle, PM_UI_APP, __ri_find_svcapp, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Failed to get appinfo_get_list [%s]\n", pkgid);
+		_LOGE("@Failed to get appinfo_get_list [%s]\n", pkgid);
 		return;
 	}
 	pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
-	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Failed to get destroy_pkginfo [%s]\n", pkgid);
-	}
 }
 
 static int __ail_change_info(int op, const char *appid)
@@ -2306,7 +2601,7 @@ static int __ail_change_info(int op, const char *appid)
 	int ret = 0;
 
 	if ((lib_handle = dlopen(LIBAIL_PATH, RTLD_LAZY)) == NULL) {
-		_d_msg(DEBUG_ERR, "dlopen is failed LIBAIL_PATH[%s]\n", LIBAIL_PATH);
+		_LOGE("dlopen is failed LIBAIL_PATH[%s]\n", LIBAIL_PATH);
 		goto END;
 	}
 
@@ -2334,7 +2629,7 @@ static int __ail_change_info(int op, const char *appid)
 
 	if ((ail_desktop_operation =
 	     dlsym(lib_handle, aop)) == NULL || dlerror() != NULL) {
-		_d_msg(DEBUG_ERR, "can not find symbol \n");
+		_LOGE("can not find symbol \n");
 
 		goto END;
 	}
@@ -2355,174 +2650,354 @@ static int __ri_update_ail_info(const pkgmgrinfo_appinfo_h handle, void *user_da
 
 	ret = pkgmgrinfo_appinfo_get_appid(handle, &appid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to execute pkgmgrinfo_appinfo_get_appid[%d].\n", ret);
+		_LOGE("Failed to execute pkgmgrinfo_appinfo_get_appid[%d].\n", ret);
 		return ret;
 	}
 
 	ret = __ail_change_info(AIL_INSTALL, appid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to execute __ail_change_info[%s].\n", appid);
+		_LOGE("Failed to execute __ail_change_info[%s].\n", appid);
 	}
 
 	return ret;
 }
 
-int _rpm_install_pkg_with_dbpath(char *pkgfilepath, char *pkgid)
+static int __child_list_cb (const pkgmgrinfo_pkginfo_h handle, void *user_data)
 {
 	int ret = 0;
-	char buff[BUF_SIZE] = {'\0'};
+	char *pkgid = NULL;
+
+	ret = pkgmgrinfo_pkginfo_get_pkgid(handle, &pkgid);
+	if(ret < 0) {
+		_LOGE("get_pkgid failed\n");
+		return ret;
+	}
+
+	_LOGD("@child pkgid is [%s] for uninstallation", pkgid);
+
+	ret = _rpm_uninstall_pkg_with_dbpath(pkgid, 0);
+	if(ret != 0) {
+		_LOGE("uninstall pkg(%s) failed\n",pkgid );
+	}
+
+	return ret;
+}
+
+static void __uninstall_child_package_by_mother_pkgid(const char *pkgid)
+{
+	int ret = 0;
+	pkgmgrinfo_pkginfo_filter_h handle = NULL;
+
+	ret = pkgmgrinfo_pkginfo_filter_create(&handle);
+	if (ret != 0) {
+		_LOGE("filter_create failed for (%s)\n", pkgid);
+		return;
+	}
+
+	ret = pkgmgrinfo_pkginfo_filter_add_string(handle, PMINFO_PKGINFO_PROP_PACKAGE_STORECLIENT_ID, pkgid);
+	if (ret < 0) {
+		_LOGE("PMINFO_PKGINFO_PROP_PACKAGE_STORECLIENT_ID add failed\n");
+		goto end;
+	}
+
+	ret = pkgmgrinfo_pkginfo_filter_foreach_pkginfo(handle, __child_list_cb, NULL);
+	if (ret < 0) {
+		_LOGE("foreach_pkginfo failed\n");
+	}
+
+end:
+	pkgmgrinfo_pkginfo_filter_destroy(handle);
+}
+
+int _rpm_install_pkg_with_dbpath(char *pkgfilepath, char *pkgid, char *clientid)
+{
+	int ret = 0;
 	char manifest[BUF_SIZE] = { '\0'};
-	char srcpath[BUF_SIZE] = {'\0'};
-	pkgmgrinfo_install_location location = 1;
-	int size = -1;
+	char resultxml[BUF_SIZE] = {'\0'};
 	char cwd[BUF_SIZE] = {'\0'};
 	int home_dir = 0;
-
+	char *temp = NULL;
+#ifdef APP2EXT_ENABLE
+	app2ext_handle *handle = NULL;
+	GList *dir_list = NULL;
+	pkgmgrinfo_install_location location = 1;
+	int size = -1;
+	unsigned long rpm_size = 0;
+#endif
 	/*send event for start*/
-	_ri_broadcast_status_notification(pkgid, "start", "install");
-
-	_d_msg(DEBUG_INFO, "[#]start : _rpm_install_pkg_with_dbpath\n");
+	_ri_broadcast_status_notification(pkgid, "rpm", "start", "install");
+	_LOGD("[#]start : _rpm_install_pkg_with_dbpath");
 
 	/*getcwd*/
-	getcwd(cwd, BUF_SIZE);
-	if (cwd[0] == '\0') {
-		_d_msg(DEBUG_ERR, "@getcwd() failed.\n");
+	temp = getcwd(cwd, BUF_SIZE);
+	if ((temp == NULL) ||(cwd[0] == '\0')) {
+		_LOGE("@failed to get the current directory info.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#Current working directory is %s\n", cwd);
+	_LOGD("#current working directory is %s", cwd);
 
 	/*change dir*/
 	ret = __ri_change_dir(TEMP_DIR);
 	if (ret == -1) {
-		_d_msg(DEBUG_ERR, "@change dir failed.\n");
+		_LOGE("@failed to change directory.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#Switched to %s\n", TEMP_DIR);
+	_LOGD("#switched to %s", TEMP_DIR);
 
 	/*run cpio script*/
 	const char *cpio_argv[] = { CPIO_SCRIPT, pkgfilepath, NULL };
-	ret = __ri_xsystem(cpio_argv);
+	ret = _ri_xsystem(cpio_argv);
 
 	/*get manifext.xml path*/
 	snprintf(manifest, BUF_SIZE, "%s/opt/share/packages/%s.xml", TEMP_DIR, pkgid);
-	_d_msg(DEBUG_INFO, "#Manifest name is %s\n", manifest);
+	_LOGD("#manifest name is %s", manifest);
 
 	if (access(manifest, F_OK)) {
-		_d_msg(DEBUG_INFO, "#There is no RW manifest.xml. check RO manifest.xml.\n");
+		_LOGD("#there is no RW manifest.xml. check RO manifest.xml.");
 
 		memset(manifest, '\0', sizeof(manifest));
 		snprintf(manifest, BUF_SIZE, "%s/usr/share/packages/%s.xml", TEMP_DIR, pkgid);
-		_d_msg(DEBUG_INFO, "#Manifest name is %s\n", manifest);
+		_LOGD("#manifest name is %s", manifest);
 
 		if (access(manifest, F_OK)) {
-			_d_msg(DEBUG_ERR, "@Can not find manifest.xml in the pkg.\n");
+			_LOGE("@can not find manifest.xml in the pkg.");
 			ret = RPM_INSTALLER_ERR_NO_MANIFEST;
 			goto err;
 		} else {
 			home_dir = 0;
 		}
 
+#if 0	//disable "copy ro-xml to rw-xml", because of some bug
 		snprintf(srcpath, BUF_SIZE, "%s", manifest);
 		memset(manifest, '\0', sizeof(manifest));
 		snprintf(manifest, BUF_SIZE, "%s/%s.xml", MANIFEST_RW_DIRECTORY, pkgid);
 
 		const char *xml_update_argv[] = { CPIO_SCRIPT_UPDATE_XML, srcpath, manifest, NULL };
-		ret = __ri_xsystem(xml_update_argv);
-
+		ret = _ri_xsystem(xml_update_argv);
+#endif
 	} else {
 		home_dir = 1;
 	}
 	/*send event for install_percent*/
-	_ri_broadcast_status_notification(pkgid, "install_percent", "30");
+	_ri_broadcast_status_notification(pkgid, "rpm", "install_percent", "30");
 
 	/*check manifest.xml validation*/
 	ret = pkgmgr_parser_check_manifest_validation(manifest);
 	if(ret < 0) {
-		_d_msg(DEBUG_ERR, "@invalid manifest\n");
+		_LOGE("@invalid manifest");
 		ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
 		goto err;
 	}
 
 	/*check for signature and certificate*/
-	_ri_verify_signatures(TEMP_DIR, pkgid);
+	ret = _ri_verify_signatures(TEMP_DIR, pkgid);
     if (ret < 0) {
-    	_d_msg(DEBUG_ERR, "@signature and certificate failed(%s).\n", pkgid);
+    	_LOGE("@signature and certificate failed(%s).", pkgid);
 		ret = RPM_INSTALLER_ERR_SIG_INVALID;
 		goto err;
     }
-    _d_msg(DEBUG_INFO, "#_ri_verify_signatures success.\n");
+    _LOGD("#_ri_verify_signatures success.");
 
     /*chdir*/
 	ret = chdir(cwd);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@chdir(%s) failed [%s]\n", cwd, strerror(errno));
+		_LOGE("@failed to change directory(%s)(%s)", cwd, strerror(errno));
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
+
+#ifdef APP2EXT_ENABLE
+	ret = __get_location_from_xml(manifest, &location);
+	if (ret < 0) {
+		_LOGE("@Failed to get install location\n");
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	} else {
+		if (location == PMINFO_INSTALL_LOCATION_PREFER_EXTERNAL) {
+			_LOGD("#Install: external storage location");
+
+			/*Get the rpm's size from rpm header*/
+			rpm_size = _ri_calculate_rpm_size(pkgfilepath);
+			if(rpm_size != 0){
+				rpm_size = rpm_size/(1024*1024);      //rpm size in MB
+				_LOGD("#Rpm file(%s) size is %lu MB",pkgfilepath,rpm_size);
+
+				/*Add margin to the rpm size*/
+				rpm_size = rpm_size + RPM_SIZE_MARGIN(rpm_size);
+				_LOGD("#Rpm file (%s) size after margin is %lu MB",pkgfilepath,rpm_size);
+			}else{
+				_LOGE("@Failed to get size from rpm header\n");
+				ret = RPM_INSTALLER_ERR_INTERNAL;
+				goto err;
+			}
+
+			/*
+			Get the size from the manifest file.
+			*/
+			ret = __get_size_from_xml(manifest, &size);
+			if (ret != PMINFO_R_OK) {
+				size = rpm_size;
+				_LOGD(" #rpm size is %d MB",size);
+			}else{
+				size = size>rpm_size?size:rpm_size;
+				_LOGD("#rpm size is %d MB",size);
+			}
+		}
+	}
+
+	if ((location == PMINFO_INSTALL_LOCATION_PREFER_EXTERNAL) && size > 0) {
+		handle = app2ext_init(APP2EXT_SD_CARD);
+		if (handle == NULL) {
+			_LOGE("@app2ext init failed\n");
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto err;
+		}
+		if ((&(handle->interface) != NULL) && (handle->interface.pre_install != NULL) && (handle->interface.post_install != NULL)){
+			dir_list = __rpm_populate_dir_list();
+			if (dir_list == NULL) {
+				_LOGE("@ \nError in populating the directory list\n");
+				app2ext_deinit(handle);
+				ret = RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS;
+				goto err;
+			}
+			ret = handle->interface.pre_install(gpkgname, dir_list, size);
+			if (ret == APP2EXT_ERROR_MMC_STATUS) {
+				_LOGE("@app2xt MMC is not here, go internal\n");
+			} else if (ret == APP2EXT_SUCCESS){
+				_LOGE("@pre_install done, go internal\n");
+			}
+			else {
+				_LOGE("@app2xt pre install API failed (%d)\n", ret);
+				__rpm_clear_dir_list(dir_list);
+				handle->interface.post_install(gpkgname, APP2EXT_STATUS_FAILED);
+				app2ext_deinit(handle);
+				ret = RPM_INSTALLER_ERR_INTERNAL;
+				goto err;
+			}
+		}
+	}
+#endif
+
 
 	/*run script*/
 	if (home_dir == 0) {
+#if 0	//disable "INSTALL_SCRIPT_WITH_DBPATH_RO", because of some bug
 		const char *argv[] = { INSTALL_SCRIPT_WITH_DBPATH_RO, pkgfilepath, NULL };
-		ret = __ri_xsystem(argv);
+		ret = _ri_xsystem(argv);
+#endif
+		const char *argv[] = { INSTALL_SCRIPT, pkgfilepath, NULL };
+		ret = _ri_xsystem(argv);
 	} else {
 		const char *argv[] = { INSTALL_SCRIPT_WITH_DBPATH_RW, pkgfilepath, NULL };
-		ret = __ri_xsystem(argv);
+		ret = _ri_xsystem(argv);
 	}
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@install complete with error(%d)\n", ret);
+		_LOGE("@failed to install the pkg(%d).", ret);
+#ifdef APP2EXT_ENABLE
+		if ((handle != NULL) && (handle->interface.post_install != NULL)){
+			__rpm_clear_dir_list(dir_list);
+			handle->interface.post_install(gpkgname, APP2EXT_STATUS_FAILED);
+			app2ext_deinit(handle);
+		}
+#endif
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#install script success.\n");
+	_LOGD("#install success.");
+
+	/*write the storeclient-id to manifest.xml*/
+	if (clientid != NULL) {
+		if (home_dir == 0) {
+			snprintf(resultxml, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, pkgid);
+		} else {
+			snprintf(resultxml, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+		}
+
+		const char *convert_argv[] = { RPM_UPDATE_XML, manifest, clientid, resultxml, NULL };
+		ret = _ri_xsystem(convert_argv);
+		if (ret != 0) {
+			_LOGE("@Failed to convert the manifest.xml");
+			goto err;
+		}
+
+		_LOGD("#client id[%s], input manifest:[%s], dest manifest:[%s]", clientid, manifest, resultxml);
+	}
 
 	/*send event for install_percent*/
-	_ri_broadcast_status_notification(pkgid, "install_percent", "60");
+	_ri_broadcast_status_notification(pkgid, "rpm", "install_percent", "60");
 
-	/*if post is in rpm-spec, execute post as a script*/
-	//__ri_post_script(pkgfilepath, pkgid);
+#ifdef APP2EXT_ENABLE
+	if ((handle != NULL) && (handle->interface.post_install != NULL)){
+		__rpm_clear_dir_list(dir_list);
+		handle->interface.post_install(gpkgname, APP2EXT_STATUS_SUCCESS);
+		app2ext_deinit(handle);
+	}
+#endif
 
 	/*Parse the manifest to get install location and size. If installation fails, remove manifest info from DB*/
-	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, NULL);
+	if (clientid != NULL) {
+		ret = pkgmgr_parser_parse_manifest_for_installation(resultxml, NULL);
+	} else {
+		ret = pkgmgr_parser_parse_manifest_for_installation(manifest, NULL);
+	}
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Parsing Manifest Failed\n");
+		_LOGE("@failed to parse the manifest.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#Parsing Manifest Success\n");
-
-	/*apply smack to shared dir*/
-	__rpm_apply_shared_privileges(pkgid, 1);
-
-	/*apply smack by privilege*/
-	ret = _ri_apply_perm(pkgid);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@apply perm failed with err(%d)\n", ret);
-	}
-	_d_msg(DEBUG_INFO, "#apply perm success\n");
+	_LOGD("#manifest parsing success");
 
 	/*register cert info*/
 	_ri_register_cert(pkgid);
 
-	/*reload smack*/
-	ret = __ri_smack_reload(pkgid, INSTALL_REQ);
+	/*search_ug_app*/
+	_coretpk_installer_search_ui_gadget(pkgid);
+
+	/*apply smack to shared dir*/
+	__rpm_apply_smack(pkgid, 1);
+
+	/*apply smack by privilege*/
+	ret = _ri_apply_privilege(pkgid, 0);
 	if (ret != 0) {
-		_d_msg(DEBUG_INFO, "__ri_smack_reload failed.\n");
+		_LOGE("@failed to apply permission(%d).", ret);
 	}
+	_LOGD("#permission applying success.");
+
+	/*reload smack*/
+	ret = _ri_smack_reload_all();
+	if (ret != 0) {
+		_LOGD("@failed to reload_all the smack.");
+	}
+
 	/*send event for install_percent*/
-	_ri_broadcast_status_notification(pkgid, "install_percent", "100");
+	_ri_broadcast_status_notification(pkgid, "rpm", "install_percent", "100");
 
 err:
-	__rpm_delete_dir(TEMP_DIR);
-	__rpm_delete_dir(TEMP_DBPATH);
+	_rpm_delete_dir(TEMP_DIR);
+	_rpm_delete_dir(TEMP_DBPATH);
 
-	if (ret == 0) {
-		_d_msg(DEBUG_INFO, "[#]end : _rpm_install_pkg_with_dbpath\n");
-		_ri_broadcast_status_notification(pkgid, "end", "ok");
-		__ri_launch_consumer(pkgid);
+	 if (ret == RPM_INSTALLER_SUCCESS) {
+		 _LOGD("[#]end : _rpm_install_pkg_with_dbpath");
+		 __ri_launch_consumer(pkgid);
+		_ri_broadcast_status_notification(pkgid, "rpm", "end", "ok");
+		_ri_stat_cb(pkgid, "end", "ok");
 	} else {
-		_d_msg(DEBUG_ERR, "[@]end : _rpm_install_pkg_with_dbpath\n");
-		_ri_broadcast_status_notification(pkgid, "end", "fail");
+		_LOGE("[@]end : _rpm_install_pkg_with_dbpath");
+		/*remove db info*/
+		ret = _coretpk_installer_remove_db_info(pkgid);
+		if (ret < 0) {
+			_LOGE("_coretpk_installer_remove_db_info is failed.");
+		}
+
+		char *errstr = NULL;
+		_ri_error_no_to_string(ret, &errstr);
+		_ri_broadcast_status_notification(pkgid, "rpm", "error", errstr);
+		_ri_stat_cb(pkgid, "error", errstr);
+		_ri_broadcast_status_notification(pkgid, "rpm", "end", "fail");
+		sleep(2);
+		_ri_stat_cb(pkgid, "end", "fail");
+		_LOGE("install failed with err(%d) (%s)\n", ret, errstr);
 	}
 
 	return ret;
@@ -2532,22 +3007,24 @@ int _rpm_upgrade_pkg_with_dbpath(char *pkgfilepath, char *pkgid)
 {
 	int ret = 0;
 	char manifest[BUF_SIZE] = { '\0'};
-	char buff[BUF_SIZE] = { '\0' };
-	char srcpath[BUF_SIZE] = {'\0'};
-	pkgmgr_install_location location = 1;
-	int size = -1;
 	char cwd[BUF_SIZE] = {'\0'};
 	int home_dir = 0;
 	pkgmgrinfo_pkginfo_h pkghandle;
-
-	_ri_broadcast_status_notification(pkgid, "start", "update");
-
-	_d_msg(DEBUG_INFO, "[#]start : _rpm_upgrade_pkg_with_dbpath\n");
+	char *temp = NULL;
+#ifdef APP2EXT_ENABLE
+	app2ext_handle *handle = NULL;
+	GList *dir_list = NULL;
+	pkgmgrinfo_installed_storage location = 1;
+	int size = -1;
+	unsigned long rpm_size = 0;
+#endif
+	_ri_broadcast_status_notification(pkgid, "rpm", "start", "update");
+	_LOGD("[#]start : _rpm_upgrade_pkg_with_dbpath");
 
 	/*terminate running app*/
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkghandle);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Failed to get pkginfo handle\n");
+		_LOGE("@failed to get pkginfo handle");
 		ret = RPM_INSTALLER_ERR_PKG_NOT_FOUND;
 		goto err;
 	}
@@ -2555,81 +3032,82 @@ int _rpm_upgrade_pkg_with_dbpath(char *pkgfilepath, char *pkgid)
 	pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 
 	/*getcwd*/
-	getcwd(cwd, BUF_SIZE);
-	if (cwd[0] == '\0') {
-		_d_msg(DEBUG_ERR, "@getcwd() failed.\n");
+	temp = getcwd(cwd, BUF_SIZE);
+	if ((temp == NULL) ||(cwd[0] == '\0')) {
+		_LOGE("@getcwd() failed.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#Current working directory is %s.\n", cwd);
+	_LOGD("#current working directory is %s.", cwd);
 
 	/*change dir*/
 	ret = __ri_change_dir(TEMP_DIR);
 	if (ret == -1) {
-		_d_msg(DEBUG_ERR, "@change dir failed.\n");
+		_LOGE("@change dir failed.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#Switched to %s\n", TEMP_DIR);
+	_LOGD("#switched to %s", TEMP_DIR);
 
 	/*run cpio script*/
 	const char *cpio_argv[] = { CPIO_SCRIPT, pkgfilepath, NULL };
-	ret = __ri_xsystem(cpio_argv);
+	ret = _ri_xsystem(cpio_argv);
 
 	/*get manifext.xml path*/
 	snprintf(manifest, BUF_SIZE, "%s/opt/share/packages/%s.xml", TEMP_DIR, pkgid);
-	_d_msg(DEBUG_INFO, "#Manifest name is %s.\n", manifest);
+	_LOGD("#manifest name is %s.", manifest);
 
 	if (access(manifest, F_OK)) {
-		_d_msg(DEBUG_INFO, "#There is no RW manifest.xml. check RO manifest.xml.\n");
+		_LOGD("#there is no RW manifest.xml. check RO manifest.xml.");
 
 		memset(manifest, '\0', sizeof(manifest));
 		snprintf(manifest, BUF_SIZE, "%s/usr/share/packages/%s.xml", TEMP_DIR, pkgid);
-		_d_msg(DEBUG_INFO, "#Manifest name is %s.\n", manifest);
+		_LOGD("#manifest name is %s.", manifest);
 
 		if (access(manifest, F_OK)) {
-			_d_msg(DEBUG_ERR, "@Can not find manifest.xml in the pkg.\n");
+			_LOGE("@can not find manifest.xml in the pkg.");
 			ret = RPM_INSTALLER_ERR_NO_MANIFEST;
 			goto err;
 		} else {
 			home_dir = 0;
 		}
 
+#if 0	//disable "copy ro-xml to rw-xml", because of some bug
 		snprintf(srcpath, BUF_SIZE, "%s", manifest);
 		memset(manifest, '\0', sizeof(manifest));
 		snprintf(manifest, BUF_SIZE, "%s/%s.xml", MANIFEST_RW_DIRECTORY, pkgid);
 
 		const char *xml_update_argv[] = { CPIO_SCRIPT_UPDATE_XML, srcpath, manifest, NULL };
-		ret = __ri_xsystem(xml_update_argv);
-
+		ret = _ri_xsystem(xml_update_argv);
+#endif
 	} else {
 		home_dir = 1;
 	}
 
 	/*send event for install_percent*/
-	_ri_broadcast_status_notification(pkgid, "install_percent", "30");
+	_ri_broadcast_status_notification(pkgid, "rpm", "install_percent", "30");
 
 	/*check manifest.xml validation*/
 	ret = pkgmgr_parser_check_manifest_validation(manifest);
 	if(ret < 0) {
-		_d_msg(DEBUG_ERR, "@invalid manifest\n");
+		_LOGE("@invalid manifest");
 		ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
 		goto err;
 	}
 
 	/*check for signature and certificate*/
-	_ri_verify_signatures(TEMP_DIR, pkgid);
+	ret = _ri_verify_signatures(TEMP_DIR, pkgid);
     if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@signature and certificate failed(%s).\n", pkgid);
+		_LOGE("@signature and certificate failed(%s).", pkgid);
 		ret = RPM_INSTALLER_ERR_SIG_INVALID;
 		goto err;
     }
-    _d_msg(DEBUG_INFO, "#_ri_verify_signatures success.\n");
+    _LOGD("#_ri_verify_signatures success.");
 
     /*chdir*/
 	ret = chdir(cwd);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@chdir(%s) failed(%s).\n", cwd, strerror(errno));
+		_LOGE("@chdir(%s) failed(%s).", cwd, strerror(errno));
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
@@ -2637,44 +3115,124 @@ int _rpm_upgrade_pkg_with_dbpath(char *pkgfilepath, char *pkgid)
     /*remove dir for clean*/
 	__ri_remove_updated_dir(pkgid);
 
+	_LOGD("#Preserve the smack file");
+	/*Preserve the smack rule file */
+	ret = __ri_copy_smack_rule_file(UPGRADE_REQ,pkgid,0);
+	if(ret != RPM_INSTALLER_SUCCESS)
+		goto err;
+#ifdef APP2EXT_ENABLE
+	ret = pkgmgrinfo_pkginfo_get_pkginfo(gpkgname, &pkghandle);
+	if (ret < 0) {
+		_LOGE("Failed to get pkginfo handle\n");
+		ret = RPM_INSTALLER_ERR_PKG_NOT_FOUND;
+		goto err;
+	} else {
+		ret = pkgmgrinfo_pkginfo_get_installed_storage(pkghandle, &location);
+		if (ret < 0) {
+			_LOGE("Failed to get install location\n");
+			pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto err;
+		} else {
+			if (location == PMINFO_EXTERNAL_STORAGE) {
+				/*Get the rpm's size from rpm header*/
+				rpm_size = _ri_calculate_rpm_size(pkgfilepath);
+				if(rpm_size != 0){
+					rpm_size = rpm_size/(1024*1024);      //rpm size in MB
+					_LOGD("#Rpm file(%s) size is %lu MB",pkgfilepath,rpm_size);
+
+					/*Add margin to the rpm size*/
+					rpm_size = rpm_size + RPM_SIZE_MARGIN(rpm_size);
+					_LOGD("#Rpm file (%s) size after margin is %lu MB",pkgfilepath,rpm_size);
+				}else{
+					_LOGE("@Failed to get size from rpm header\n");
+					ret = RPM_INSTALLER_ERR_INTERNAL;
+					goto err;
+				}
+
+				/*
+				Get the size from the manifest file.
+				*/
+				ret = __get_size_from_xml(manifest, &size);
+				if (ret != PMINFO_R_OK) {
+					size = rpm_size;
+					_LOGD(" #rpm size is %d",size);
+				}else{
+					size = size>rpm_size?size:rpm_size;
+					_LOGD("#rpm size is %d",size);
+				}
+			}
+		}
+		pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
+		if ((location == PMINFO_EXTERNAL_STORAGE) && size > 0) {
+			handle = app2ext_init(APP2EXT_SD_CARD);
+			if (handle == NULL) {
+				_LOGE("app2ext init failed\n");
+				ret = RPM_INSTALLER_ERR_INTERNAL;
+				goto err;
+			}
+			if ((&(handle->interface) != NULL) && (handle->interface.pre_upgrade != NULL) && (handle->interface.post_upgrade != NULL)){
+				dir_list = __rpm_populate_dir_list();
+				if (dir_list == NULL) {
+					_LOGE("\nError in populating the directory list\n");
+					ret = RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS;
+					app2ext_deinit(handle);
+					goto err;
+				}
+				ret = handle->interface.pre_upgrade(gpkgname, dir_list, size);
+				if (ret == APP2EXT_ERROR_MMC_STATUS ) {
+					_LOGE("app2xt MMC is not here, go internal (%d)\n", ret);
+				}else if(ret == APP2EXT_SUCCESS){
+					_LOGE("pre upgrade done, go internal");
+				}else {
+					_LOGE("app2xt pre upgrade API failed (%d)\n", ret);
+					__rpm_clear_dir_list(dir_list);
+					handle->interface.post_upgrade(gpkgname, APP2EXT_STATUS_FAILED);
+					ret = RPM_INSTALLER_ERR_INTERNAL;
+					app2ext_deinit(handle);
+					goto err;
+				}
+			}
+		}
+	}
+#endif
+
 	/*run script*/
 	if (home_dir == 0) {
+#if 0	//disable "UPGRADE_SCRIPT_WITH_DBPATH_RO", because of some bug
 		const char *argv[] = { UPGRADE_SCRIPT_WITH_DBPATH_RO, pkgfilepath, NULL };
-		ret = __ri_xsystem(argv);
+		ret = _ri_xsystem(argv);
+#endif
+		const char *argv[] = { UPGRADE_SCRIPT, pkgfilepath, NULL };
+		ret = _ri_xsystem(argv);
 	} else {
 		const char *argv[] = { UPGRADE_SCRIPT_WITH_DBPATH_RW, pkgfilepath, NULL };
-		ret = __ri_xsystem(argv);
+		ret = _ri_xsystem(argv);
 	}
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@upgrade complete with error(%d)\n", ret);
+		_LOGE("@upgrade complete with error(%d)", ret);
+#ifdef APP2EXT_ENABLE
+		if ((handle != NULL) && (handle->interface.post_upgrade != NULL)){
+			__rpm_clear_dir_list(dir_list);
+			handle->interface.post_upgrade(gpkgname, APP2EXT_STATUS_FAILED);
+			app2ext_deinit(handle);
+		}
+#endif
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#upgrade script success.\n");
+	_LOGD("#upgrade script success.");
 
 	/*send event for install_percent*/
-	_ri_broadcast_status_notification(pkgid, "install_percent", "60");
-
-	/*if post is in rpm-spec, execute post as a script*/
-	//__ri_post_script(pkgfilepath, pkgid);
+	_ri_broadcast_status_notification(pkgid, "rpm", "install_percent", "60");
 
 	/*Parse the manifest to get install location and size. If fails, remove manifest info from DB.*/
 	ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Parsing manifest failed.\n");
+		_LOGE("@parsing manifest failed.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_d_msg(DEBUG_INFO, "#Parsing manifest success.\n");
-
-	/*apply smack to shared dir*/
-	__rpm_apply_shared_privileges(pkgid, 1);
-
-	/*apply smack by privilege*/
-	ret = _ri_apply_perm(pkgid);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "@apply perm failed with err(%d)\n", ret);
-	}
-	_d_msg(DEBUG_INFO, "#apply perm success.\n");
+	_LOGD("#parsing manifest success.");
 
 	/*unregister cert info*/
 	_ri_unregister_cert(pkgid);
@@ -2682,108 +3240,246 @@ int _rpm_upgrade_pkg_with_dbpath(char *pkgfilepath, char *pkgid)
 	/*register cert info*/
 	_ri_register_cert(pkgid);
 
-	/*reload smack*/
-	ret = __ri_smack_reload(pkgid, UPGRADE_REQ);
+#ifdef APP2EXT_ENABLE
+	if ((handle != NULL) && (handle->interface.post_upgrade != NULL)){
+		__rpm_clear_dir_list(dir_list);
+		handle->interface.post_upgrade(gpkgname, APP2EXT_STATUS_SUCCESS);
+		app2ext_deinit(handle);
+	}
+#endif
+
+	/*search_ug_app*/
+	_coretpk_installer_search_ui_gadget(pkgid);
+
+	/*apply smack to shared dir*/
+	__rpm_apply_smack(pkgid, 1);
+
+	/*apply smack by privilege*/
+	ret = _ri_apply_privilege(pkgid, 0);
 	if (ret != 0) {
-		_d_msg(DEBUG_INFO, "__ri_smack_reload failed.\n");
+		_LOGE("@apply perm failed with err(%d)", ret);
+	}
+	_LOGD("#apply perm success.");
+
+	/*reload smack*/
+	ret = _ri_smack_reload_all();
+	if (ret != 0) {
+		_LOGD("_ri_smack_reload_all failed.");
 	}
 
 	/*send event for install_percent*/
-	_ri_broadcast_status_notification(pkgid, "install_percent", "100");
+	_ri_broadcast_status_notification(pkgid, "rpm", "install_percent", "100");
 
 err:
-	__rpm_delete_dir(TEMP_DIR);
-	__rpm_delete_dir(TEMP_DBPATH);
+	_rpm_delete_dir(TEMP_DIR);
+	_rpm_delete_dir(TEMP_DBPATH);
 
-	if (ret == 0) {
-		_d_msg(DEBUG_INFO, "[#]end : _rpm_upgrade_pkg_with_dbpath\n");
-		_ri_broadcast_status_notification(pkgid, "end", "ok");
-		__ri_launch_consumer(pkgid);
+	 if (ret == RPM_INSTALLER_SUCCESS) {
+		 _LOGD("[#]end : _rpm_upgrade_pkg_with_dbpath");
+		 __ri_launch_consumer(pkgid);
+		_ri_broadcast_status_notification(pkgid, "rpm", "end", "ok");
+		_ri_stat_cb(pkgid, "end", "ok");
 	} else {
-		_d_msg(DEBUG_ERR, "[@]end : _rpm_upgrade_pkg_with_dbpath\n");
-		_ri_broadcast_status_notification(pkgid, "end", "fail");
+		 _LOGE("[@]end : _rpm_upgrade_pkg_with_dbpath");
+		char *errstr = NULL;
+		_ri_error_no_to_string(ret, &errstr);
+		_ri_broadcast_status_notification(pkgid, "rpm", "error", errstr);
+		_ri_stat_cb(pkgid, "error", errstr);
+		_ri_broadcast_status_notification(pkgid, "rpm", "end", "fail");
+		sleep(2);
+		_ri_stat_cb(pkgid, "end", "fail");
+		_LOGE("install failed with err(%d) (%s)\n", ret, errstr);
 	}
 
 	return ret;
 }
 
-int _rpm_uninstall_pkg_with_dbpath(char *pkgid, bool is_system)
+int _rpm_uninstall_pkg_with_dbpath(const char *pkgid, bool is_system)
 {
-	int ret = 0;
-	char buff[BUF_SIZE] = {'\0'};
-	pkgmgrinfo_pkginfo_h pkghandle = NULL;
-
-	if(pkgid == NULL) {
-		_d_msg(DEBUG_INFO, "pkgid is null\n");
+	if (pkgid == NULL) {
+		_LOGE("pkgid is NULL.");
 		return -1;
 	}
 
-	_d_msg(DEBUG_INFO, "[#]start : _rpm_uninstall_pkg_with_dbpath(%s)\n", pkgid);
+	int ret = 0;
+	char buff[BUF_SIZE] = {'\0'};
+	char tizen_manifest[BUF_SIZE] = {'\0'};
+	pkgmgrinfo_pkginfo_h pkghandle = NULL;
+	bool mother_package = false;
+	bool coretpk = false;
 
-	/*send start event*/
+	#ifdef APP2EXT_ENABLE
+	app2ext_handle *handle = NULL;
+	pkgmgrinfo_installed_storage location = 1;
+	#endif
+
+	_LOGD("pkgid=[%s], is_system=[%d]", pkgid, is_system);
+
+	snprintf(tizen_manifest, BUF_SIZE, "%s/%s/tizen-manifest.xml", OPT_USR_APPS, pkgid);
+	if (access(tizen_manifest, R_OK) == 0) {
+		coretpk = true;
+		_LOGD("[%s] is existed.", tizen_manifest);
+	}
+
+	// send start event
 	if (is_system)
-		_ri_broadcast_status_notification(pkgid, "start", "update");
+		_ri_broadcast_status_notification(pkgid, coretpk ? "coretpk" : "rpm", "start", "update");
 	else
-		_ri_broadcast_status_notification(pkgid, "start", "uninstall");
+		_ri_broadcast_status_notification(pkgid, coretpk ? "coretpk" : "rpm", "start", "uninstall");
 
-	/*terminate running app*/
+	// terminate running app
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkghandle);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "@Failed to get pkginfo handle\n");
+		_LOGE("pkgmgrinfo_pkginfo_get_pkginfo(%s) failed.", pkgid);
 		ret = RPM_INSTALLER_ERR_PKG_NOT_FOUND;
 		goto end;
 	}
 	pkgmgrinfo_appinfo_get_list(pkghandle, PM_UI_APP, __ri_check_running_app, NULL);
+
+	// If package is mother package, then uninstall child package
+	pkgmgrinfo_pkginfo_is_mother_package(pkghandle, &mother_package);
+	if (mother_package == true) {
+		_LOGD("[%s] is mother package", pkgid);
+		__uninstall_child_package_by_mother_pkgid(pkgid);
+	}
 	pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 
-	/*del root path dir*/
-	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
-	if (__is_dir(buff)) {
-		__rpm_delete_dir(buff);
+	snprintf(tizen_manifest, BUF_SIZE, "%s/%s/tizen-manifest.xml", OPT_USR_APPS, pkgid);
+	if (access(tizen_manifest, R_OK) == 0) {
+		coretpk = true;
+		_LOGD("[%s] is existing.", tizen_manifest);
 	}
 
-	/*del manifest*/
+	// del root path dir
+	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
+	if (__is_dir(buff)) {
+		_rpm_delete_dir(buff);
+	}
+
+	// del root path dir for ext
+	if (_coretpk_installer_get_configuration_value(INI_VALUE_MAKE_EXT_DIRECTORY)) {
+		char extpath[BUF_SIZE] = {'\0'};
+		snprintf(extpath, BUF_SIZE, "%s/%s", OPT_STORAGE_SDCARD_APP_ROOT, pkgid);
+		if (__is_dir(extpath)) {
+			_rpm_delete_dir(extpath);
+		}
+	}
+
+	// del manifest
 	memset(buff, '\0', BUF_SIZE);
 	snprintf(buff, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
 	(void)remove(buff);
 
-	/*check system pkg, if pkg is system pkg,  need to update xml on USR_SHARE_PACKAGES*/
+	// check system pkg, if pkg is system pkg, need to update xml on USR_SHARE_PACKAGES
 	if (is_system) {
 		memset(buff, '\0', BUF_SIZE);
 		snprintf(buff, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, pkgid);
+		_LOGE("manifest for upgrade, path=[%s]",buff);
 		ret = pkgmgr_parser_parse_manifest_for_upgrade(buff, NULL);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "@Parsing manifest failed.\n");
+			_LOGE("parsing manifest failed.");
 		}
 		goto end;
 	} else {
-		/*del db info*/
+#ifdef APP2EXT_ENABLE
+		ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkghandle);
+		if (ret < 0) {
+			_LOGE("failed to get pkginfo handle");
+			ret = RPM_INSTALLER_ERR_PKG_NOT_FOUND;
+			goto end;
+		}
+		ret = pkgmgrinfo_pkginfo_get_installed_storage(pkghandle, &location);
+		if (ret < 0) {
+			_LOGE("failed to get install location\n");
+			pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
+			return RPM_INSTALLER_ERR_INTERNAL;
+		}
+
+		pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
+		if (location == PMINFO_EXTERNAL_STORAGE) {
+			handle = app2ext_init(APP2EXT_SD_CARD);
+			if (handle == NULL) {
+				_LOGE("app2ext init failed\n");
+				return RPM_INSTALLER_ERR_INTERNAL;
+			}
+			if ((&(handle->interface) != NULL) && (handle->interface.pre_uninstall != NULL) && (handle->interface.post_uninstall != NULL) &&
+					(handle->interface.disable != NULL)){
+				ret = handle->interface.disable(pkgid);
+				if (ret != APP2EXT_SUCCESS) {
+					_LOGE("Unmount ret[%d]", ret);
+				}
+				ret = app2ext_get_app_location(pkgid);
+				if (ret == APP2EXT_INTERNAL_MEM){
+					_LOGE("app2xt APP is not in MMC, go internal (%d)\n", ret);
+				}
+				else {
+					ret = handle->interface.pre_uninstall(pkgid);
+					if (ret == APP2EXT_ERROR_MMC_STATUS ) {
+						_LOGE("app2xt MMC is not here, go internal (%d)\n", ret);
+					}else if (ret == APP2EXT_SUCCESS){
+						_LOGE("pre uninstall done, go to internal");
+					}else {
+						_LOGE("app2xt pre uninstall API failed (%d)\n", ret);
+						handle->interface.post_uninstall(pkgid);
+						app2ext_deinit(handle);
+						return RPM_INSTALLER_ERR_INTERNAL;
+					}
+				}
+			}
+		}
+#endif
+
+		// del db info
 		ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "@Parsing Manifest Failed\n");
+			_LOGE("pkgmgr_parser_parse_manifest_for_uninstallation() failed, pkgid=[%s]", pkgid);
 		}
+
+#ifdef APP2EXT_ENABLE
+		if ((handle != NULL) && (handle->interface.post_uninstall != NULL)){
+			handle->interface.post_uninstall(pkgid);
+			app2ext_deinit(handle);
+		}
+#endif
+
 	}
 
-	/*execute privilege APIs*/
+	// execute privilege APIs
 	_ri_privilege_revoke_permissions(pkgid);
 	_ri_privilege_unregister_package(pkgid);
 
-	/*Unregister cert info*/
+	// Unregister cert info
 	_ri_unregister_cert(pkgid);
 
-	/*reload smack*/
-	ret = __ri_smack_reload(pkgid, UNINSTALL_REQ);
-	if (ret != 0) {
-		_d_msg(DEBUG_INFO, "__ri_smack_reload failed.\n");
+end:
+	// Restore the old smack file
+	if (coretpk == false) {
+		ret = __ri_copy_smack_rule_file(UNINSTALL_REQ,pkgid,is_system);
+		if (ret != RPM_INSTALLER_SUCCESS){
+			_LOGD("smack restore failed");
+		}else{
+			/*reload smack*/
+			ret = _ri_smack_reload_all();
+			if (ret != 0) {
+				_LOGD("_ri_smack_reload_all failed.");
+			}
+		}
 	}
 
-end:
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "[@]end : _rpm_uninstall_pkg_with_dbpath\n");
-		_ri_broadcast_status_notification(pkgid, "end", "fail");
+		_LOGE("failed, ret=[%d]", ret);
+		char *errstr = NULL;
+		_ri_error_no_to_string(ret, &errstr);
+		_ri_broadcast_status_notification(pkgid, coretpk ? "coretpk" : "rpm", "error",  errstr);
+		_ri_stat_cb(pkgid, "error", errstr);
+		sleep(2);
+		_ri_broadcast_status_notification(pkgid, coretpk ? "coretpk" : "rpm", "end",  "fail");
+		_ri_stat_cb(pkgid, "end", "fail");
+		_LOGE("remove failed with err(%d) (%s)\n", ret, errstr);
 	} else {
-		_d_msg(DEBUG_INFO, "[#]end : _rpm_uninstall_pkg_with_dbpath\n");
-		_ri_broadcast_status_notification(pkgid, "end", "ok");
+		_LOGE("success");
+		_ri_broadcast_status_notification(pkgid, coretpk ? "coretpk" : "rpm", "end", "ok");
+		_ri_stat_cb(pkgid, "end", "ok");
 	}
 
 	return ret;
@@ -2797,7 +3493,7 @@ int _rpm_uninstall_pkg(char *pkgid)
 	bool is_system = 0;
 	bool is_removable = 0;
 	char buff[BUF_SIZE] = {'\0'};
-	pkgmgr_install_location location = 1;
+	pkgmgrinfo_install_location location = 1;
 #ifdef APP2EXT_ENABLE
 	app2ext_handle *handle = NULL;
 #endif
@@ -2805,31 +3501,34 @@ int _rpm_uninstall_pkg(char *pkgid)
 	pkgmgrinfo_pkginfo_h pkghandle;
 	const char *argv[] = { UNINSTALL_SCRIPT, pkgid, NULL };
 
-	_d_msg(DEBUG_INFO, "start : _rpm_uninstall_pkg\n");
+	_LOGD("start : _rpm_uninstall_pkg\n");
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkghandle);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to get pkginfo handle\n");
+		_LOGE("Failed to get pkginfo handle\n");
 		return RPM_INSTALLER_ERR_PKG_NOT_FOUND;
 	}
+	/*terminate running app*/
+	pkgmgrinfo_appinfo_get_list(pkghandle, PM_UI_APP, __ri_check_running_app, NULL);
 
 	ret = pkgmgrinfo_pkginfo_is_system(pkghandle, &is_system);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "pkgmgrinfo_pkginfo_is_system failed.\n");
+		_LOGE("pkgmgrinfo_pkginfo_is_system failed.\n");
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 	if (is_system) {
 		ret = pkgmgrinfo_pkginfo_is_update(pkghandle, &is_update);
 		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "pkgmgrinfo_pkginfo_is_system failed.\n");
+			_LOGE("pkgmgrinfo_pkginfo_is_system failed.\n");
 			return RPM_INSTALLER_ERR_INTERNAL;
 		}
 		if (is_update) {
 			pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 			/*updated and system pkg need to "remove-update"*/
+			_LOGD("Remove Update[%s]",pkgid);
 			ret = _rpm_uninstall_pkg_with_dbpath(pkgid, 1);
 			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "uninstall_pkg_with_dbpath for system, is_update fail\n");
+				_LOGE("uninstall_pkg_with_dbpath for system, is_update fail\n");
 			}
 			return 0;
 		}
@@ -2837,46 +3536,47 @@ int _rpm_uninstall_pkg(char *pkgid)
 		pkgmgrinfo_pkginfo_is_removable(pkghandle, &is_removable);
 		if (is_removable) {
 			/*non-system and can be removable,  it should be deleted*/
+			_LOGD("Delete Package [%s]",pkgid);
 			pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 			ret = _rpm_uninstall_pkg_with_dbpath(pkgid, 0);
 			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "uninstall_pkg_with_dbpath for non-system, is_remove fail\n");
+				_LOGE("uninstall_pkg_with_dbpath for non-system, is_remove fail\n");
 			}
 			return 0;
 		}
 	}
 
-	_ri_broadcast_status_notification(pkgid, "start", "uninstall");
+	_ri_broadcast_status_notification(pkgid, "rpm", "start", "uninstall");
 
 #ifdef APP2EXT_ENABLE
 	ret = pkgmgrinfo_pkginfo_get_install_location(pkghandle, &location);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to get install location\n");
-		pkgmgr_pkginfo_destroy_pkginfo(pkghandle);
+		_LOGE("Failed to get install location\n");
+		pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 
 	pkgmgrinfo_appinfo_get_list(pkghandle, PM_UI_APP, __ri_check_running_app, NULL);
 
 	pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
-	if (location == PM_INSTALL_LOCATION_PREFER_EXTERNAL) {
+	if (location == PMINFO_INSTALL_LOCATION_PREFER_EXTERNAL) {
 		handle = app2ext_init(APP2EXT_SD_CARD);
 		if (handle == NULL) {
-			_d_msg(DEBUG_ERR, "app2ext init failed\n");
+			_LOGE("app2ext init failed\n");
 			return RPM_INSTALLER_ERR_INTERNAL;
 		}
 		if ((&(handle->interface) != NULL) && (handle->interface.pre_uninstall != NULL) && (handle->interface.post_uninstall != NULL)){
 			ret = app2ext_get_app_location(pkgid);
 			if (ret == APP2EXT_INTERNAL_MEM){
-					_d_msg(DEBUG_ERR, "app2xt APP is not in MMC, go internal (%d)\n", ret);
+					_LOGE("app2xt APP is not in MMC, go internal (%d)\n", ret);
 			}
 			else {
 				ret = handle->interface.pre_uninstall(pkgid);
 				if (ret == APP2EXT_ERROR_MMC_STATUS || ret == APP2EXT_SUCCESS ) {
-					_d_msg(DEBUG_ERR, "app2xt MMC is not here, go internal (%d)\n", ret);
+					_LOGE("app2xt MMC is not here, go internal (%d)\n", ret);
 				}
 				else {
-					_d_msg(DEBUG_ERR, "app2xt pre uninstall API failed (%d)\n", ret);
+					_LOGE("app2xt pre uninstall API failed (%d)\n", ret);
 					handle->interface.post_uninstall(pkgid);
 					app2ext_deinit(handle);
 					return RPM_INSTALLER_ERR_INTERNAL;
@@ -2891,25 +3591,25 @@ int _rpm_uninstall_pkg(char *pkgid)
 	file is uninstalled. If uninstallation fails, we need to re-insert manifest info for consistency*/
 	manifest = pkgmgr_parser_get_manifest_file(pkgid);
 	if (manifest == NULL) {
-		_d_msg(DEBUG_ERR, "manifest name is NULL\n");
+		_LOGE("manifest name is NULL\n");
 		app2ext_deinit(handle);
 		return RPM_INSTALLER_ERR_NO_MANIFEST;
 	}
-	_d_msg(DEBUG_INFO, "manifest name is %s\n", manifest);
+	_LOGD("manifest name is %s\n", manifest);
 	ret = pkgmgr_parser_parse_manifest_for_uninstallation(manifest, NULL);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "pkgmgr_parser_parse_manifest_for_uninstallation failed.\n");
+		_LOGE("pkgmgr_parser_parse_manifest_for_uninstallation failed.\n");
 	}
 
 #endif
 
-	ret = __rpm_xsystem(argv);
+	ret = _rpm_xsystem(argv);
 	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "uninstall failed with error(%d)\n", ret);
+		_LOGE("uninstall failed with error(%d)\n", ret);
 		#ifdef PRE_CHECK_FOR_MANIFEST
 		err = pkgmgr_parser_parse_manifest_for_installation(manifest, NULL);
 		if (err < 0) {
-			_d_msg(DEBUG_ERR, "Parsing Manifest Failed\n");
+			_LOGE("Parsing Manifest Failed\n");
 		}
 		if (manifest) {
 			free(manifest);
@@ -2942,7 +3642,7 @@ int _rpm_uninstall_pkg(char *pkgid)
 	snprintf(buff, BUF_SIZE, "db/app-info/%s/installed-time", pkgid);
 	err = vconf_unset(buff);
 	if (err) {
-		_d_msg(DEBUG_ERR, "unset installation time failed\n");
+		_LOGE("unset installation time failed\n");
 	}
 	/*execute privilege APIs*/
 	_ri_privilege_revoke_permissions(pkgid);
@@ -2950,19 +3650,17 @@ int _rpm_uninstall_pkg(char *pkgid)
 	/*Unregister cert info*/
 	_ri_unregister_cert(gpkgname);
 
-	_d_msg(DEBUG_INFO, "end : _rpm_uninstall_pkg(%d)\n", ret);
+	_LOGD("end : _rpm_uninstall_pkg(%d)\n", ret);
 	return ret;
 }
 
 int _rpm_install_corexml(char *pkgfilepath, char *pkgid)
 {
-	/*validate signature and certifictae*/
-	char buff[BUF_SIZE] = {'\0'};
 	int ret = 0;
-
+	/*validate signature and certifictae*/
 	ret = _ri_verify_signatures(USR_APPS, pkgid);
     if (ret < 0) {
-		_d_msg(DEBUG_ERR, "_ri_verify_signatures Failed : %s\n", pkgid);
+		_LOGE("_ri_verify_signatures Failed : %s\n", pkgid);
 		ret = RPM_INSTALLER_ERR_SIG_INVALID;
 		goto err;
     }
@@ -2970,20 +3668,23 @@ int _rpm_install_corexml(char *pkgfilepath, char *pkgid)
 	/* check : given pkgid is deactivation*/
 	ret = __ri_check_pkgid_for_deactivation(pkgid);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "pkgid[%s] for deactivation dont need to install.\n", pkgid);
+		_LOGE("pkgid[%s] for deactivation dont need to install.\n", pkgid);
 		goto err;
 	}
 
 	/* Parse and insert manifest in DB*/
     ret = pkgmgr_parser_parse_manifest_for_installation(pkgfilepath, NULL);
     if (ret < 0) {
-		_d_msg(DEBUG_RESULT, "Installing Manifest Failed : %s\n", pkgfilepath);
+		_LOGD("Installing Manifest Failed : %s\n", pkgfilepath);
 		ret = RPM_INSTALLER_ERR_PACKAGE_NOT_INSTALLED;
 		goto err;
     }
 
     // _ri_register_cert has __ri_free_cert_chain.
     _ri_register_cert(pkgid);
+
+	/*search_ug_app*/
+	_coretpk_installer_search_ui_gadget(pkgid);
 
 	ret = RPM_INSTALLER_SUCCESS;
 
@@ -2996,434 +3697,13 @@ err:
 
 }
 
-int _rpm_install_pkg(char *pkgfilepath, char *installoptions)
-{
-	int ret = 0;
-	time_t cur_time;
-	char buff[BUF_SIZE] = {'\0'};
-	char manifest[BUF_SIZE] = { '\0'};
-	manifest_x *mfx = NULL;
-	pkgmgrinfo_install_location location = 1;
-	int size = -1;
-#ifdef APP2EXT_ENABLE
-	app2ext_handle *handle = NULL;
-	GList *dir_list = NULL;
-#endif
-	const char *argv[] = {
-		INSTALL_SCRIPT, pkgfilepath, installoptions, NULL
-	};
-
-#ifdef PRE_CHECK_FOR_MANIFEST
-	char cwd[BUF_SIZE] = {'\0'};
-	int m_exist = 0;
-	/*flag to test whether app home dir is /usr or /opt*/
-	int home_dir = 0;
-	getcwd(cwd, BUF_SIZE);
-	if (cwd[0] == '\0') {
-		_d_msg(DEBUG_ERR, "getcwd() Failed\n");
-		return RPM_INSTALLER_ERR_INTERNAL;
-	}
-	_d_msg(DEBUG_ERR, "Current working directory is %s\n", cwd);
-	ret = mkdir(TEMP_DIR, 0644);
-	if (ret < 0) {
-		if (access(TEMP_DIR, F_OK) == 0) {
-			__rpm_delete_dir(TEMP_DIR);
-			ret = mkdir(TEMP_DIR, 0644);
-			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "mkdir() failed\n");
-				return RPM_INSTALLER_ERR_INTERNAL;
-			}
-		} else {
-			_d_msg(DEBUG_ERR, "mkdir() failed\n");
-			return RPM_INSTALLER_ERR_INTERNAL;
-		}
-	}
-
-	ret = chdir(TEMP_DIR);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "chdir(%s) failed [%s]\n", TEMP_DIR, strerror(errno));
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-	_d_msg(DEBUG_ERR, "Switched to %s\n", TEMP_DIR);
-
-	const char *cpio_argv[] = { CPIO_SCRIPT, pkgfilepath, NULL };
-	ret = __rpm_xsystem(cpio_argv);
-
-	snprintf(manifest, BUF_SIZE, "%s/opt/share/packages/%s.xml", TEMP_DIR, gpkgname);
-	_d_msg(DEBUG_ERR, "Manifest name is %s\n", manifest);
-	if (access(manifest, F_OK)) {
-		_d_msg(DEBUG_ERR, "No rw Manifest File Found\n");
-
-		snprintf(manifest, BUF_SIZE, "%s/usr/share/packages/%s.xml", TEMP_DIR, gpkgname);
-		_d_msg(DEBUG_ERR, "Manifest ro name is %s\n", manifest);
-
-		if (access(manifest, F_OK)) {
-			_d_msg(DEBUG_ERR, "No ro Manifest File Found\n");
-			ret = RPM_INSTALLER_ERR_NO_MANIFEST;
-			goto err;
-		} else {
-			m_exist = 1;
-			home_dir = 0;
-		}
-	} else {
-		m_exist = 1;
-		home_dir = 1;
-	}
-	if (m_exist) {
-		ret = pkgmgr_parser_check_manifest_validation(manifest);
-		if(ret < 0) {
-			_d_msg(DEBUG_ERR, "Invalid manifest\n");
-			ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
-			goto err;
-		}
-		/*get package name from xml*/
-		mfx = pkgmgr_parser_process_manifest_xml(manifest);
-		if (mfx) {
-			if (gpkgname) {
-				free(gpkgname);
-				gpkgname = strdup(mfx->package);
-			}
-		}
-		pkgmgr_parser_free_manifest_xml(mfx);
-	}
-	/*check for signature and certificate*/
-	_ri_verify_signatures(TEMP_DIR, gpkgname);
-    if (ret < 0) {
-		_d_msg(DEBUG_ERR, "_ri_verify_signatures Failed : %s\n", gpkgname);
-		ret = RPM_INSTALLER_ERR_SIG_INVALID;
-		goto err;
-    }
-
-	ret = chdir(cwd);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "chdir(%s) failed [%s]\n", cwd, strerror(errno));
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-
-#endif
-
-#ifdef APP2EXT_ENABLE
-	ret = __get_location_from_xml(manifest, &location);
-	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to get install location\n");
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	} else {
-		if (location == PMINFO_INSTALL_LOCATION_PREFER_EXTERNAL) {
-			ret = __get_size_from_xml(manifest, &size);
-			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "Failed to get package size\n");
-				ret = RPM_INSTALLER_ERR_INTERNAL;
-				goto err;
-			}
-		}
-	}
-
-	if ((location == PMINFO_INSTALL_LOCATION_PREFER_EXTERNAL) && size > 0) {
-		handle = app2ext_init(APP2EXT_SD_CARD);
-		if (handle == NULL) {
-			_d_msg(DEBUG_ERR, "app2ext init failed\n");
-			ret = RPM_INSTALLER_ERR_INTERNAL;
-			goto err;
-		}
-		if ((&(handle->interface) != NULL) && (handle->interface.pre_install != NULL) && (handle->interface.post_install != NULL)){
-			dir_list = __rpm_populate_dir_list();
-			if (dir_list == NULL) {
-				_d_msg(DEBUG_ERR, "\nError in populating the directory list\n");
-				app2ext_deinit(handle);
-				ret = RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS;
-				goto err;
-			}
-			ret = handle->interface.pre_install(gpkgname, dir_list, size);
-			if (ret == APP2EXT_ERROR_MMC_STATUS) {
-				_d_msg(DEBUG_ERR, "app2xt MMC is not here, go internal\n");
-			} else if (ret == APP2EXT_SUCCESS){
-				_d_msg(DEBUG_ERR, "pre_install done, go internal\n");
-			}
-			else {
-				_d_msg(DEBUG_ERR, "app2xt pre install API failed (%d)\n", ret);
-				__rpm_clear_dir_list(dir_list);
-				handle->interface.post_install(gpkgname, APP2EXT_STATUS_FAILED);
-				app2ext_deinit(handle);
-				ret = RPM_INSTALLER_ERR_INTERNAL;
-				goto err;
-			}
-		}
-	}
-#endif
-
-	ret = __rpm_xsystem(argv);
-
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "install complete with error(%d)\n", ret);
-
-		#ifdef APP2EXT_ENABLE
-		if ((handle != NULL) && (handle->interface.post_install != NULL)){
-			__rpm_clear_dir_list(dir_list);
-			handle->interface.post_install(gpkgname, APP2EXT_STATUS_FAILED);
-			app2ext_deinit(handle);
-		}
-		#endif
-		goto err;
-	}
-
-#ifdef APP2EXT_ENABLE
-	if ((handle != NULL) && (handle->interface.post_install != NULL)){
-		__rpm_clear_dir_list(dir_list);
-		handle->interface.post_install(gpkgname, APP2EXT_STATUS_SUCCESS);
-		app2ext_deinit(handle);
-	}
-#endif
-
-	/*Parse the manifest to get install location and size. If installation fails, remove manifest info from DB*/
-        ret = pkgmgr_parser_parse_manifest_for_installation(manifest, NULL);
-        if (ret < 0) {
-                _d_msg(DEBUG_ERR, "Parsing Manifest Failed\n");
-        } else {
-                _d_msg(DEBUG_ERR, "Parsing Manifest Success\n");
-        }
-
-	/* Install Success. Store the installation time*/
-	cur_time = time(NULL);
-	snprintf(buff, BUF_SIZE, "db/app-info/%s/installed-time", gpkgname);
-	/* The time is stored in time_t format. It can be converted to
-	local time or GMT time as per the need by the apps*/
-	if(vconf_set_int(buff, cur_time)) {
-		_d_msg(DEBUG_ERR, "setting installation time failed\n");
-		vconf_unset(buff);
-	}
-	__rpm_apply_shared_privileges(gpkgname, home_dir);
-	ret = _ri_apply_perm(gpkgname);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "apply perm failed with err(%d)\n", ret);
-	} else {
-		_d_msg(DEBUG_INFO, "apply perm success\n");
-	}
-
-	/*Register cert info*/
-	_ri_register_cert(gpkgname);
-err:
-	__rpm_delete_dir(TEMP_DIR);
-	return ret;
-}
-
-int _rpm_upgrade_pkg(char *pkgfilepath, char *installoptions)
-{
-	int ret = 0;
-	char manifest[BUF_SIZE] = { '\0'};
-	manifest_x *mfx = NULL;
-	char buff[BUF_SIZE] = { '\0' };
-	pkgmgr_install_location location = 1;
-	int size = -1;
-#ifdef APP2EXT_ENABLE
-	app2ext_handle *handle = NULL;
-	GList *dir_list = NULL;
-#endif
-	pkgmgr_pkginfo_h pkghandle;
-
-#ifdef PRE_CHECK_FOR_MANIFEST
-	char cwd[BUF_SIZE] = {'\0'};
-	int m_exist = 0;
-	int home_dir = 0;
-	getcwd(cwd, BUF_SIZE);
-	if (cwd[0] == '\0') {
-		_d_msg(DEBUG_ERR, "getcwd() Failed\n");
-		return RPM_INSTALLER_ERR_INTERNAL;
-	}
-	_d_msg(DEBUG_ERR, "Current working directory is %s\n", cwd);
-	ret = mkdir(TEMP_DIR, 0644);
-	if (ret < 0) {
-		if (access(TEMP_DIR, F_OK) == 0) {
-			__rpm_delete_dir(TEMP_DIR);
-			ret = mkdir(TEMP_DIR, 0644);
-			if (ret < 0) {
-				_d_msg(DEBUG_ERR, "mkdir() failed\n");
-				return RPM_INSTALLER_ERR_INTERNAL;
-			}
-		} else {
-			_d_msg(DEBUG_ERR, "mkdir() failed\n");
-			return RPM_INSTALLER_ERR_INTERNAL;
-		}
-	}
-	ret = chdir(TEMP_DIR);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "chdir(%s) failed [%s]\n", TEMP_DIR, strerror(errno));
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-	_d_msg(DEBUG_ERR, "Switched to %s\n", TEMP_DIR);
-
-	const char *cpio_argv[] = { CPIO_SCRIPT, pkgfilepath, NULL };
-	ret = __rpm_xsystem(cpio_argv);
-
-	snprintf(manifest, BUF_SIZE, "%s/opt/share/packages/%s.xml", TEMP_DIR, gpkgname);
-	_d_msg(DEBUG_ERR, "Manifest name is %s\n", manifest);
-	if (access(manifest, F_OK)) {
-		_d_msg(DEBUG_ERR, "No rw Manifest File Found\n");
-
-		snprintf(manifest, BUF_SIZE, "%s/usr/share/packages/%s.xml", TEMP_DIR, gpkgname);
-		_d_msg(DEBUG_ERR, "Manifest ro name is %s\n", manifest);
-
-		if (access(manifest, F_OK)) {
-			_d_msg(DEBUG_ERR, "No ro Manifest File Found\n");
-			ret = RPM_INSTALLER_ERR_NO_MANIFEST;
-			goto err;
-		} else {
-			m_exist = 1;
-			home_dir = 0;
-		}
-	} else {
-		m_exist = 1;
-		home_dir = 1;
-	}
-
-	if (m_exist) {
-		ret = pkgmgr_parser_check_manifest_validation(manifest);
-		if(ret < 0) {
-			_d_msg(DEBUG_ERR, "Invalid manifest\n");
-			ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
-			goto err;
-		}
-		/*get package name from xml*/
-		mfx = pkgmgr_parser_process_manifest_xml(manifest);
-		if (mfx) {
-			if (gpkgname) {
-				free(gpkgname);
-				gpkgname = strdup(mfx->package);
-			}
-		}
-		pkgmgr_parser_free_manifest_xml(mfx);
-	}
-	/*check for signature and certificate*/
-	_ri_verify_signatures(TEMP_DIR, gpkgname);
-    if (ret < 0) {
-		_d_msg(DEBUG_ERR, "_ri_verify_signatures Failed : %s\n", gpkgname);
-		ret = RPM_INSTALLER_ERR_SIG_INVALID;
-		goto err;
-    }
-
-	ret = chdir(cwd);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "chdir(%s) failed [%s]\n", cwd, strerror(errno));
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-	/*Parse the manifest to get install location and size. If upgradation fails, remove manifest info from DB*/
-	ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, NULL);
-	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Parsing Manifest Failed\n");
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	} else {
-		_d_msg(DEBUG_ERR, "Parsing Manifest Success\n");
-	}
-#endif
-
-#ifdef APP2EXT_ENABLE
-	ret = pkgmgr_pkginfo_get_pkginfo(gpkgname, &pkghandle);
-	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "Failed to get pkginfo handle\n");
-		ret = RPM_INSTALLER_ERR_PKG_NOT_FOUND;
-		goto err;
-	} else {
-		ret = pkgmgr_pkginfo_get_install_location(pkghandle, &location);
-		if (ret < 0) {
-			_d_msg(DEBUG_ERR, "Failed to get install location\n");
-			pkgmgr_pkginfo_destroy_pkginfo(pkghandle);
-			ret = RPM_INSTALLER_ERR_INTERNAL;
-			goto err;
-		} else {
-			if (location == PM_INSTALL_LOCATION_PREFER_EXTERNAL) {
-				ret = pkgmgr_pkginfo_get_package_size(pkghandle, &size);
-				if (ret < 0) {
-					_d_msg(DEBUG_ERR, "Failed to get package size\n");
-					pkgmgr_pkginfo_destroy_pkginfo(pkghandle);
-					ret = RPM_INSTALLER_ERR_INTERNAL;
-					goto err;
-				}
-			}
-		}
-		pkgmgr_pkginfo_destroy_pkginfo(pkghandle);
-		if ((location == PM_INSTALL_LOCATION_PREFER_EXTERNAL) && size > 0) {
-			handle = app2ext_init(APP2EXT_SD_CARD);
-			if (handle == NULL) {
-				_d_msg(DEBUG_ERR, "app2ext init failed\n");
-				ret = RPM_INSTALLER_ERR_INTERNAL;
-				goto err;
-			}
-			if ((&(handle->interface) != NULL) && (handle->interface.pre_upgrade != NULL) && (handle->interface.post_upgrade != NULL)){
-				dir_list = __rpm_populate_dir_list();
-				if (dir_list == NULL) {
-					_d_msg(DEBUG_ERR, "\nError in populating the directory list\n");
-					ret = RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS;
-					app2ext_deinit(handle);
-					goto err;
-				}
-				ret = handle->interface.pre_upgrade(gpkgname, dir_list, size);
-				if (ret == APP2EXT_ERROR_MMC_STATUS || ret == APP2EXT_SUCCESS ) {
-					_d_msg(DEBUG_ERR, "app2xt MMC is not here, go internal (%d)\n", ret);
-				}
-				else {
-					_d_msg(DEBUG_ERR, "app2xt pre upgrade API failed (%d)\n", ret);
-					__rpm_clear_dir_list(dir_list);
-					handle->interface.post_upgrade(gpkgname, APP2EXT_STATUS_FAILED);
-					ret = RPM_INSTALLER_ERR_INTERNAL;
-					app2ext_deinit(handle);
-					goto err;
-				}
-			}
-		}
-	}
-#endif
-	const char *upgrade_argv[] = {UPGRADE_SCRIPT, pkgfilepath, installoptions, NULL};
-	ret = __rpm_xsystem(upgrade_argv);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "upgrade complete with error(%d)\n", ret);
-		/*remove manifest info*/
-		#ifdef PRE_CHECK_FOR_MANIFEST
-//		pkgmgr_parser_parse_manifest_for_uninstallation(manifest, NULL);
-		#endif
-		#ifdef APP2EXT_ENABLE
-		if ((handle != NULL) && (handle->interface.post_upgrade != NULL)){
-			__rpm_clear_dir_list(dir_list);
-			handle->interface.post_upgrade(gpkgname, APP2EXT_STATUS_FAILED);
-			app2ext_deinit(handle);
-		}
-		#endif
-		goto err;
-	}
-#ifdef APP2EXT_ENABLE
-	if ((handle != NULL) && (handle->interface.post_upgrade != NULL)){
-		__rpm_clear_dir_list(dir_list);
-		handle->interface.post_upgrade(gpkgname, APP2EXT_STATUS_SUCCESS);
-		app2ext_deinit(handle);
-	}
-#endif
-
-	__rpm_apply_shared_privileges(gpkgname, home_dir);
-	ret = _ri_apply_perm(gpkgname);
-	if (ret != 0) {
-		_d_msg(DEBUG_ERR, "apply perm failed with err(%d)\n", ret);
-	} else {
-		_d_msg(DEBUG_INFO, "apply perm success\n");
-	}
-
-	/*Register cert info*/
-	_ri_unregister_cert(gpkgname);
-	_ri_register_cert(gpkgname);
-err:
-	__rpm_delete_dir(TEMP_DIR);
-	return ret;
-}
-
 int _rpm_move_pkg(char *pkgid, int move_type)
 {
 	app2ext_handle *hdl = NULL;
 	int ret = 0;
 	int movetype = -1;
 	GList *dir_list = NULL;
+	pkgmgrinfo_pkginfo_h pkghandle = NULL;
 
 	if (move_type == PM_MOVE_TO_INTERNAL)
 		movetype = APP2EXT_MOVE_TO_PHONE;
@@ -3432,23 +3712,46 @@ int _rpm_move_pkg(char *pkgid, int move_type)
 	else
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 
+	ret = pkgmgrinfo_pkginfo_get_pkginfo(gpkgname,&pkghandle);
+	if(ret < 0){
+		_LOGE("@failed to get the pkginfo handle!!");
+		ret = RPM_INSTALLER_ERR_PKG_NOT_FOUND;
+		return ret;
+	}
+	/* Terminate the running instance of app */
+	pkgmgrinfo_appinfo_get_list(pkghandle,PM_UI_APP,__ri_check_running_app,NULL);
+	pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 	hdl = app2ext_init(APP2EXT_SD_CARD);
 	if ((hdl != NULL) && (hdl->interface.move != NULL)){
 		dir_list = __rpm_populate_dir_list();
 		if (dir_list == NULL) {
-			_d_msg(DEBUG_ERR, "\nError in populating the directory list\n");
+			_LOGE("\nError in populating the directory list\n");
 			return RPM_INSTALLER_ERR_RPM_SCRIPT_WRONG_ARGS;
 		}
 		ret = hdl->interface.move(pkgid, dir_list, movetype);
 		__rpm_clear_dir_list(dir_list);
 		if (ret != 0) {
-			_d_msg(DEBUG_ERR, "Failed to move app\n");
+			_LOGE("Failed to move app\n");
 			return RPM_INSTALLER_ERR_INTERNAL;
+		}else{
+			if(move_type == PM_MOVE_TO_INTERNAL){
+				_LOGD("#updating the installed storage from external to internal");
+				ret = pkgmgrinfo_pkginfo_set_installed_storage(pkgid, INSTALL_INTERNAL);
+			}
+			else{
+				_LOGD("#updating the installed storage from internal to external");
+				ret = pkgmgrinfo_pkginfo_set_installed_storage(pkgid, INSTALL_EXTERNAL);
+			}
+
+			if(ret != PMINFO_R_OK){
+				_LOGE("@failed to udpate the installed storage");
+				return RPM_INSTALLER_ERR_INTERNAL;
+			}
 		}
 		app2ext_deinit(hdl);
 		return RPM_INSTALLER_SUCCESS;
 	} else {
-		_d_msg(DEBUG_ERR,"Failed to get app2ext handle\n");
+		_LOGE("Failed to get app2ext handle\n");
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 }
@@ -3469,15 +3772,15 @@ int _rpm_process_cscxml(char *csc_script)
 	op_str = __ri_get_str(csc_str, TOKEN_OPERATION_STR);
 	remove_str = __ri_get_str(csc_str, TOKEN_REMOVE_STR);
 	if((path_str == NULL) || (op_str == NULL) || (remove_str == NULL)){
-		_d_msg(DEBUG_ERR, "csc-info : input param is null[%s, %s, %s]\n", path_str, op_str, remove_str);
+		_LOGE("csc-info : input param is null[%s, %s, %s]\n", path_str, op_str, remove_str);
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "csc-info : path=%s, op=%s, remove=%s\n", path_str, op_str, remove_str);
+	_LOGD("csc-info : path=%s, op=%s, remove=%s\n", path_str, op_str, remove_str);
 
 	/*get operation type*/
 	op_type = __ri_get_op_type(op_str);
 	if(op_type < 0){
-		_d_msg(DEBUG_ERR, "csc-info : operation error[%s, %s]\n", path_str, op_str);
+		_LOGE("csc-info : operation error[%s, %s]\n", path_str, op_str);
 		goto end;
 	}
 
@@ -3499,7 +3802,66 @@ int _rpm_process_cscxml(char *csc_script)
 	}
 
 	if (ret < 0)
-		_d_msg(DEBUG_ERR, "fota-info : Fota fail [pkgid=%s, operation=%d]\n",path_str, op_type);
+		_LOGE("fota-info : Fota fail [pkgid=%s, operation=%d]\n",path_str, op_type);
+
+end:
+	if(path_str)
+		free(path_str);
+	if(op_str)
+		free(op_str);
+	if(remove_str)
+		free(remove_str);
+
+	return ret;
+}
+
+int _rpm_process_csc_coretpk(char *csc_script)
+{
+	int ret = 0;
+	int op_type = 0;
+
+	char *path_str = NULL;
+	char *op_str = NULL;
+	char *remove_str = NULL;
+	char csc_str[BUF_SIZE] = {'\0'};
+	snprintf(csc_str, BUF_SIZE - 1, "%s:", csc_script);
+
+	/*get params from csc script*/
+	path_str = __ri_get_str(csc_str, TOKEN_PATH_STR);
+	op_str = __ri_get_str(csc_str, TOKEN_OPERATION_STR);
+	remove_str = __ri_get_str(csc_str, TOKEN_REMOVE_STR);
+	if((path_str == NULL) || (op_str == NULL) || (remove_str == NULL)){
+		_LOGE("csc-info : input param is null[%s, %s, %s]\n", path_str, op_str, remove_str);
+		goto end;
+	}
+	_LOGD("csc-info : path=%s, op=%s, remove=%s\n", path_str, op_str, remove_str);
+
+	/*get operation type*/
+	op_type = __ri_get_op_type(op_str);
+	if(op_type < 0){
+		_LOGE("csc-info : operation error[%s, %s]\n", path_str, op_str);
+		goto end;
+	}
+
+	switch (op_type) {
+		case INSTALL_REQ:
+			ret = _coretpk_installer_csc_install(path_str, remove_str);
+			break;
+
+		case UPGRADE_REQ:
+			ret = _coretpk_installer_csc_install(path_str, remove_str);
+			break;
+
+		case UNINSTALL_REQ:
+			ret = __ri_uninstall_csc(path_str);
+			break;
+
+		default:
+			break;
+	}
+
+	if (ret < 0)
+		_LOGE("csc-info : csc fail [pkgid=%s, operation=%d]\n",path_str, op_type);
 
 end:
 	if(path_str)
@@ -3526,15 +3888,15 @@ int _rpm_process_fota(char *fota_script)
 	pkgid = __ri_get_str(csc_str, TOKEN_PATH_STR);
 	op_str = __ri_get_str(csc_str, TOKEN_OPERATION_STR);
 	if((pkgid == NULL) || (op_str == NULL)){
-		_d_msg(DEBUG_ERR, "fota-info : input param is null[%s, %s]\n", pkgid, op_str);
+		_LOGE("fota-info : input param is null[%s, %s]\n", pkgid, op_str);
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : path=%s, op=%s\n", pkgid, op_str);
+	_LOGD("fota-info : path=%s, op=%s\n", pkgid, op_str);
 
 	/*get operation type*/
 	op_type = __ri_get_op_type(op_str);
 	if(op_type < 0){
-		_d_msg(DEBUG_ERR, "fota-info : operation error[%s, %s]\n", pkgid, op_str);
+		_LOGE("fota-info : operation error[%s, %s]\n", pkgid, op_str);
 		goto end;
 	}
 
@@ -3556,7 +3918,7 @@ int _rpm_process_fota(char *fota_script)
 	}
 
 	if (ret < 0)
-		_d_msg(DEBUG_ERR, "fota-info : Fota fail [pkgid=%s, operation=%d]\n",pkgid, op_type);
+		_LOGE("fota-info : Fota fail [pkgid=%s, operation=%d]\n",pkgid, op_type);
 
 end:
 	if(pkgid)
@@ -3581,15 +3943,15 @@ int _rpm_process_fota_for_rw(char *fota_script)
 	pkgid = __ri_get_str(fota_str, TOKEN_PATH_STR);
 	op_str = __ri_get_str(fota_str, TOKEN_OPERATION_STR);
 	if((pkgid == NULL) || (op_str == NULL)){
-		_d_msg(DEBUG_ERR, "fota-info : input param is null[%s, %s]\n", pkgid, op_str);
+		_LOGE("fota-info : input param is null[%s, %s]\n", pkgid, op_str);
 		goto end;
 	}
-	_d_msg(DEBUG_INFO, "fota-info : path=%s, op=%s\n", pkgid, op_str);
+	_LOGD("fota-info : path=%s, op=%s\n", pkgid, op_str);
 
 	/*get operation type*/
 	op_type = __ri_get_op_type(op_str);
 	if(op_type < 0){
-		_d_msg(DEBUG_ERR, "fota-info : operation error[%s, %s]\n", pkgid, op_str);
+		_LOGE("fota-info : operation error[%s, %s]\n", pkgid, op_str);
 		goto end;
 	}
 
@@ -3611,7 +3973,7 @@ int _rpm_process_fota_for_rw(char *fota_script)
 	}
 
 	if (ret < 0)
-		_d_msg(DEBUG_ERR, "fota-info : Fota fail [pkgid=%s, operation=%d]\n",pkgid, op_type);
+		_LOGE("fota-info : Fota fail [pkgid=%s, operation=%d]\n",pkgid, op_type);
 
 end:
 	if(pkgid)
@@ -3631,34 +3993,34 @@ int _rpm_process_enable(char *pkgid)
 	pkgmgrinfo_pkginfo_h handle;
 	bool is_system = 0;
 
-	_d_msg(DEBUG_ERR, "start :: pkgid[%s] enable process\n",pkgid);
+	_LOGE("start :: pkgid[%s] enable process\n",pkgid);
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
 	if ((ret == 0) && (handle != NULL)) {
-		_d_msg(DEBUG_ERR, "pkg[%s] is already installed.", pkgid);
+		_LOGE("pkg[%s] is already installed.", pkgid);
 		pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
 		return 0;
 	}
 
 	manifest = pkgmgr_parser_get_manifest_file(pkgid);
 	if (manifest == NULL) {
-		_d_msg(DEBUG_ERR, "Failed to fetch package manifest file\n");
+		_LOGE("Failed to fetch package manifest file\n");
 		return -1;
 	}
 
-	_ri_broadcast_status_notification(pkgid, PKGMGR_INSTALLER_START_KEY_STR, PKGMGR_INSTALLER_INSTALL_EVENT_STR);
+	_ri_broadcast_status_notification(pkgid, "rpm", PKGMGR_INSTALLER_START_KEY_STR, PKGMGR_INSTALLER_INSTALL_EVENT_STR);
 
 	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, NULL);
 	free(manifest);
 	if (ret < 0) {
-		_ri_broadcast_status_notification(pkgid, PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_FAIL_EVENT_STR);
-		_d_msg(DEBUG_ERR, "insert in db failed\n");
+		_ri_broadcast_status_notification(pkgid, "rpm", PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_FAIL_EVENT_STR);
+		_LOGE("insert in db failed\n");
 		return -1;
 	}
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
 	if (ret < 0) {
-		_d_msg(DEBUG_ERR, "insert in db failed\n");
+		_LOGE("insert in db failed\n");
 	} else {
 		ret = pkgmgrinfo_pkginfo_is_system(handle, &is_system);
 		if (is_system) {
@@ -3670,9 +4032,9 @@ int _rpm_process_enable(char *pkgid)
 	/*delete disabled pkg info from backup db table*/
 	pkgmgr_parser_delete_disabled_pkg(pkgid, NULL);
 
-	_ri_broadcast_status_notification(pkgid, PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_OK_EVENT_STR);
+	_ri_broadcast_status_notification(pkgid, "rpm", PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_OK_EVENT_STR);
 
-	_d_msg(DEBUG_ERR, "end :: pkgid[%s] enable process\n",pkgid);
+	_LOGE("end :: pkgid[%s] enable process\n",pkgid);
 
 	return 0;
 }
@@ -3682,32 +4044,32 @@ int _rpm_process_disable(char *pkgid)
 	int ret = 0;
 	pkgmgrinfo_pkginfo_h handle;
 
-	_d_msg(DEBUG_ERR, "start :: pkgid[%s] disable process\n",pkgid);
+	_LOGE("start :: pkgid[%s] disable process\n",pkgid);
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
 	if ((ret < 0) || (handle == NULL)) {
-		_d_msg(DEBUG_ERR, "pkgid[%s] is already disabled\n", pkgid);
+		_LOGE("pkgid[%s] is already disabled\n", pkgid);
 		return 0;
 	}
 
-	_ri_broadcast_status_notification(pkgid, PKGMGR_INSTALLER_START_KEY_STR, PKGMGR_INSTALLER_UNINSTALL_EVENT_STR);
+	_ri_broadcast_status_notification(pkgid, "rpm", PKGMGR_INSTALLER_START_KEY_STR, PKGMGR_INSTALLER_UNINSTALL_EVENT_STR);
 
 	pkgmgrinfo_appinfo_get_list(handle, PM_UI_APP, __ri_check_running_app, NULL);
 	pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
 
 	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
 	if (ret < 0) {
-		_ri_broadcast_status_notification(pkgid, PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_FAIL_EVENT_STR);
-		_d_msg(DEBUG_ERR, "pkgmgr_parser_parse_manifest_for_uninstallation failed.\n");
+		_ri_broadcast_status_notification(pkgid, "rpm", PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_FAIL_EVENT_STR);
+		_LOGE("pkgmgr_parser_parse_manifest_for_uninstallation failed.\n");
 		return -1;
 	}
 
 	/*save disabled pkg info to backup db table*/
 	pkgmgr_parser_insert_disabled_pkg(pkgid, NULL);
 
-	_ri_broadcast_status_notification(pkgid, PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_OK_EVENT_STR);
+	_ri_broadcast_status_notification(pkgid, "rpm", PKGMGR_INSTALLER_END_KEY_STR, PKGMGR_INSTALLER_OK_EVENT_STR);
 
-	_d_msg(DEBUG_ERR, "end :: pkgid[%s] disable process\n",pkgid);
+	_LOGE("end :: pkgid[%s] disable process\n",pkgid);
 	return 0;
 }
 
@@ -3763,3 +4125,100 @@ int _rpm_process_disabled_list(const char *disabled_list)
 	return 0;
 }
 
+int __ri_copy_smack_rule_file(int op, const char *pkgname, int is_system)
+{
+
+	mode_t mode = DIR_PERMS;
+	int ret = RPM_INSTALLER_SUCCESS;
+	char src[PATH_MAX]={0};
+	char dest[PATH_MAX]={0};
+
+	switch(op)
+		{
+		case UNINSTALL_REQ:
+			/*
+			For downloadable native app, restore the smack file.
+			Otherwise, remove the stored smack file.
+			*/
+			snprintf(dest,PATH_MAX-1,"%s%s.rule",SMACK_RULES_ALT_PATH,pkgname);
+			snprintf(src,PATH_MAX-1,"%s%s.rule",DIR_RPM_WGT_SMACK_RULE_OPT,pkgname);
+			_LOGD("#src:[%s] dest:[%s]",src,dest);
+
+			if(!is_system){
+				if(!access(src,F_OK)){
+					ret = remove(src);
+					if(!ret){
+						_LOGD("#File [%s] deleted.",src);
+					}else{
+						_LOGE("@Unable to delete the file [%s], error:(%s)",src,strerror(errno));
+						ret = RPM_INSTALLER_ERR_INTERNAL;
+						goto end;
+					}
+				}
+				if(!access(dest,F_OK)){
+					ret = remove(dest);
+					if(!ret){
+						_LOGD("#File [%s] deleted.",dest);
+					}else{
+						_LOGE("@Unable to delete the file [%s], error:(%s)",dest,strerror(errno));
+						ret = RPM_INSTALLER_ERR_INTERNAL;
+						goto end;
+					}
+				}
+			}else{
+				_LOGD("#Restore smack files for uninstallation [%s]",pkgname);
+				if(!access(src,F_OK)){
+					_LOGD("#Copying [%s] to [%s]",src,dest);
+					ret = __copy_file(src,dest);
+					if(!ret){
+						ret = remove(src);
+						if(!ret){
+							_LOGD("#File [%s] deleted.",src);
+						}else{
+							_LOGE("@Unable to delete the file [%s], error:(%s)",src,strerror(errno));
+							ret = RPM_INSTALLER_ERR_INTERNAL;
+							goto end;
+						}
+					}else{
+						_LOGE("@Copy Failed!!");
+						ret = RPM_INSTALLER_ERR_INTERNAL;
+						goto end;
+					}
+				}else{
+					_LOGE("@ %s.rule file is not preserved",pkgname);
+				}
+			}
+			break;
+
+		case UPGRADE_REQ:
+
+			_LOGD("#Preserve the smack file for upgrade [%s]",pkgname);
+
+			/* Apply the new smack file and preserve the old smack rule file if it is not preserved.*/
+			snprintf(src,PATH_MAX-1,"%s%s.rule",SMACK_RULES_ALT_PATH,pkgname);
+			snprintf(dest,PATH_MAX-1,"%s%s.rule",DIR_RPM_WGT_SMACK_RULE_OPT,pkgname);
+
+			_LOGD("#src[%s] dest[%s]",src,dest);
+
+			/* Create the directory if not exist to preserve the smack files */
+			if(mkdir(DIR_RPM_WGT_SMACK_RULE_OPT,mode) == 0 || errno == EEXIST){
+				if((access(src,F_OK) == 0) && (access(dest,F_OK) != 0)){
+					ret = __copy_file(src,dest);
+				}else{
+					_LOGD("#Smack file is already preserved");
+				}
+			}else{
+				_LOGE("@Temporary folder creation failed");
+				ret = RPM_INSTALLER_ERR_INTERNAL;
+			}
+			break;
+		default:
+			_LOGE("@Unsupported Operation\n");
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+		}
+
+	end:
+		return ret;
+
+
+}

@@ -32,12 +32,11 @@
 #include <header.h>
 #include <rpmts.h>
 #include <rpmdb.h>
-#include "rpm-installer.h"
-#include "rpm-frontend.h"
 #include <pkgmgr_installer.h>
 
-#define RPM	"/usr/etc/package-manager/backend/rpm"
-#define BUFF_SIZE			256
+#include "rpm-installer.h"
+#include "rpm-frontend.h"
+#include "rpm-installer-type.h"
 
 char *gpkgname = NULL;
 extern char scrolllabel[256];
@@ -74,14 +73,14 @@ static int __ri_uninstall_package(char *pkgid)
 	int ret = 0;
 	ret = _rpm_installer_package_uninstall(pkgid);
 	if (ret == RPM_INSTALLER_ERR_PACKAGE_NOT_INSTALLED) {
-		_d_msg(DEBUG_ERR, "[__ri_uninstall_package]%s "
+		_LOGE("[__ri_uninstall_package]%s "
 		       "not installed\n", pkgid);
 	} else if (ret != 0) {
-		_d_msg(DEBUG_ERR,
+		_LOGE(
 		       "[__ri_uninstall_package]%s uninstall failed(%d)\n",
 		       pkgid, ret);
 	} else {
-		_d_msg(DEBUG_ERR,
+		_LOGE(
 		       "[__ri_uninstall_package]%s successfully uninstalled\n",
 		       pkgid);
 	}
@@ -95,11 +94,11 @@ static int __ri_clear_private_data(char *pkgid)
 	int ret = 0;
 	ret = _rpm_installer_clear_private_data(pkgid);
 	if (ret == RPM_INSTALLER_SUCCESS) {
-		_d_msg(DEBUG_ERR,
+		_LOGE(
 		       "[__clear_private_data]%s clear data successful\n",
 		       pkgid);
 	} else {
-		_d_msg(DEBUG_ERR,
+		_LOGE(
 		       "[__clear_private_data]%s clear data failed(%d)\n",
 		       pkgid, ret);
 	}
@@ -111,13 +110,22 @@ static int __ri_move_package(char *pkgid, int move_type)
 	if (pkgid == NULL)
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	int ret = 0;
+	if(gpkgname){
+		free(gpkgname);
+		gpkgname = NULL;
+	}
+	gpkgname = strdup(pkgid);
+	if(!gpkgname){
+		_LOGE("Malloc failed!!");
+		return RPM_INSTALLER_ERR_INTERNAL;
+	}
 	ret = _rpm_move_pkg(pkgid, move_type);
 	if (ret == RPM_INSTALLER_SUCCESS) {
-		_d_msg(DEBUG_ERR,
+		_LOGE(
 		       "[__ri_move_package]%s move successful\n",
 		       pkgid);
 	} else {
-		_d_msg(DEBUG_ERR,
+		_LOGE(
 		       "[__ri_move_package]%s move failed(%d)\n",
 		       pkgid, ret);
 	}
@@ -202,7 +210,7 @@ static int __ri_native_recovery(int lastbackstate)
 	int opt;
 	int err = 0;
 
-	_d_msg(DEBUG_INFO, "Rpm Installer Recovery Entry \n");
+	_LOGD("Rpm Installer Recovery Entry \n");
 
 	/* which package it was installing and what was state at that time */
 	_ri_get_last_input_info(&pn, &lreq, &opt);
@@ -213,12 +221,12 @@ static int __ri_native_recovery(int lastbackstate)
 		/*
 		 * restart the last operation
 		 */
-		_d_msg(DEBUG_INFO,
+		_LOGD(
 			      "Rpm Installer Recovery started. state=%d \n", lastbackstate);
 		switch (lreq) {
 		case INSTALL_CMD:
 			err =
-			    _rpm_installer_package_install(pn, true, "--force");
+			    _rpm_installer_package_install(pn, true, "--force", NULL);
 			if (err)
 				goto RECOVERYERROR;
 			break;
@@ -228,34 +236,40 @@ static int __ri_native_recovery(int lastbackstate)
 			if (err)
 				goto RECOVERYERROR;
 			break;
+		case EFLWGT_INSTALL_CMD:
+			err = _rpm_installer_package_uninstall(pn);
+			if(err)
+				goto RECOVERYERROR;
+			break;
 
 		case CLEARDATA_CMD:
 		case MOVE_CMD:
 		case RECOVER_CMD:
 			/*TODO*/
-			_d_msg(DEBUG_INFO,
+			_LOGD(
 					"Recovery of command(%d) is to be implemented\n", lreq);
+			if(pn) free(pn);
 			return 0;
 		}
-		_d_msg(DEBUG_INFO,
+		_LOGD(
 			      " Rpm Installer Recovery Ended \n");
 		break;
 	case REQUEST_COMPLETED:
-		_d_msg(DEBUG_INFO,
+		_LOGD(
 			      " Rpm Installer Recovery. Nothing To Be Done\n");
 		_ri_set_backend_state_info(REQUEST_COMPLETED);
 		break;
 
 	case REQUEST_PENDING:
-		_d_msg(DEBUG_INFO,
+		_LOGD(
 				"Rpm Installer Recovery started. state=%d\n", lastbackstate);
 		/*Only package downgradation can be the case*/
-		err = _rpm_installer_package_install(pn, true, "--force");
+		err = _rpm_installer_package_install(pn, true, "--force", NULL);
 		if (err != RPM_INSTALLER_SUCCESS &&
 			err != RPM_INSTALLER_ERR_NEED_USER_CONFIRMATION) {
 			goto RECOVERYERROR;
 		}
-		_d_msg(DEBUG_INFO,
+		_LOGD(
 			      " Rpm Installer Recovery ended \n");
 		_ri_set_backend_state_info(REQUEST_COMPLETED);
 		break;
@@ -265,26 +279,28 @@ static int __ri_native_recovery(int lastbackstate)
 		 * Unknown state
 		 * No need to recover
 		 */
-		_d_msg(DEBUG_INFO,
+		_LOGD(
 			      " Rpm Installer Recovery Default state \n");
 		break;
 
 	}
+	if(pn) free(pn);
 	return 0;
 
  RECOVERYERROR:
-	_d_msg(DEBUG_ERR, "Error in Recovery error number = (%d)\n",
+	_LOGE("Error in Recovery error number = (%d)\n",
 		      err);
+	if(pn) free(pn);
 	return err;
 
 }
 
 static int __ri_check_root_path(const char *pkgid)
 {
-	char dirpath[BUFF_SIZE] = {'\0'};
+	char dirpath[BUF_SIZE] = {'\0'};
 	struct stat stFileInfo;
 
-	snprintf(dirpath, BUFF_SIZE, "/usr/apps/%s", pkgid);
+	snprintf(dirpath, BUF_SIZE, "/usr/apps/%s", pkgid);
 
 	(void)stat(dirpath, &stFileInfo);
 
@@ -294,95 +310,183 @@ static int __ri_check_root_path(const char *pkgid)
 	return 1;		//it menas "/opt/usr/apps/pkgid"
 }
 
+void __ri_make_directory(const char *pkgid)
+{
+	char usr_pkg[BUF_SIZE] = {'\0'};
+	char opt_pkg[BUF_SIZE] = {'\0'};
+	int ret = 0;
+
+	snprintf(usr_pkg, BUF_SIZE, "%s/%s/%s", USR_APPS, pkgid, AUTHOR_SIGNATURE_XML);
+	snprintf(opt_pkg, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, AUTHOR_SIGNATURE_XML);
+
+	// check author signature
+	if ((access(opt_pkg, R_OK) == 0) || (access(usr_pkg, R_OK) == 0)) {
+		_LOGE("pkgid[%s] has author-signature",pkgid);
+
+		// root path
+		memset(opt_pkg, '\0', BUF_SIZE);
+		snprintf(opt_pkg, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
+		if (access(opt_pkg, R_OK) != 0) {
+			_LOGE("dont have [%s]\n",opt_pkg);
+			ret = mkdir(opt_pkg, DIRECTORY_PERMISSION_755);
+			if (ret < 0) {
+				_LOGE("directory making is failed.\n");
+			}else{
+				_LOGE("directory[%s] is created", opt_pkg);
+			}
+		}
+
+		// shared
+		memset(opt_pkg, '\0', BUF_SIZE);
+		snprintf(opt_pkg, BUF_SIZE, "%s/%s/shared", OPT_USR_APPS, pkgid);
+		if (access(opt_pkg, R_OK) != 0) {
+			_LOGE("dont have [%s]\n",opt_pkg);
+			ret = mkdir(opt_pkg, DIRECTORY_PERMISSION_755);
+			if (ret < 0) {
+				_LOGE("directory making is failed.\n");
+			}else{
+				_LOGE("directory[%s] is created", opt_pkg);
+			}
+		}
+
+		// shared/data
+		memset(opt_pkg, '\0', BUF_SIZE);
+		snprintf(opt_pkg, BUF_SIZE, "%s/%s/shared/data", OPT_USR_APPS, pkgid);
+		if (access(opt_pkg, R_OK) != 0) {
+			_LOGE("dont have [%s]\n",opt_pkg);
+			ret = mkdir(opt_pkg, DIRECTORY_PERMISSION_755);
+			if (ret < 0) {
+				_LOGE("directory making is failed.\n");
+			}else{
+				_LOGE("directory[%s] is created", opt_pkg);
+			}
+		}
+
+		// shared/trusted
+		memset(opt_pkg, '\0', BUF_SIZE);
+		snprintf(opt_pkg, BUF_SIZE, "%s/%s/shared/trusted", OPT_USR_APPS, pkgid);
+		if (access(opt_pkg, R_OK) != 0) {
+			_LOGE("dont have [%s],\n",opt_pkg);
+			ret = mkdir(opt_pkg, DIRECTORY_PERMISSION_755);
+			if (ret < 0) {
+				_LOGE("directory making is failed.\n");
+			}else{
+				_LOGE("directory[%s] is created", opt_pkg);
+			}
+		}
+
+	}
+}
+
 static int __ri_process_smack(char *keyid, char *pkgid)
 {
 	int ret = 0;
 
 	/*apply smack for ug*/
 	if(strcmp(keyid,"ug-smack")==0) {
-		_d_msg(DEBUG_INFO, "only apply smack for ug\n");
-		char *perm[] = {"http://tizen.org/privilege/appsetting", NULL};
+		_LOGD("only apply smack for ug\n");
+		const char *perm[] = {"http://tizen.org/privilege/appsetting", NULL};
 		_ri_apply_smack(pkgid,__ri_check_root_path(pkgid));
 		_ri_privilege_enable_permissions(pkgid, 1, perm, 1);
 	/*apply smack for rpm package*/
 	} else if (strcmp(keyid,"rpm-smack")==0) {
-		_d_msg(DEBUG_INFO, "apply smack for rpm\n");
+		_LOGD("apply smack for rpm");
+		__ri_make_directory(pkgid);
 		_ri_apply_smack(pkgid,__ri_check_root_path(pkgid));
+
+	/*soft-reset for rpm package*/
+	} else if (strcmp(keyid,"soft-reset")==0) {
+		_LOGD("soft-reset\n");
+		_ri_soft_reset(pkgid);
+
 	/*register xml to db, call pkgmgr parser*/
 	} else if (strcmp(keyid,"core-xml")==0) {
-		_d_msg(DEBUG_INFO, "install corexml\n");
+		_LOGD("install corexml");
 		ret = _rpm_installer_corexml_install(pkgid);
 		if (ret != 0) {
-			_d_msg(DEBUG_ERR, "corexml_install failed with err(%d)\n", ret);
+			_LOGE("corexml_install failed with err(%d)\n", ret);
 		} else {
-			_d_msg(DEBUG_INFO, "corexml_install success\n");
+			_LOGD("manifest is installed successfully");
 		}
 	/*apply privilege for rpm package*/
 	} else if (strcmp(keyid,"rpm-perm")==0) {
-		_d_msg(DEBUG_INFO, "apply permmissions for rpm\n");
-		ret = _ri_apply_perm(pkgid);
+		_LOGD("apply privileges for rpm");
+		ret = _ri_apply_privilege(pkgid, 0);
 		if (ret != 0) {
-			_d_msg(DEBUG_ERR, "apply perm failed with err(%d)\n", ret);
+			_LOGE("apply privileges failed with err(%d)", ret);
 		} else {
-			_d_msg(DEBUG_INFO, "apply perm success\n");
+			_LOGD("apply privileges success");
 		}
 	/*check csc xml*/
 	} else if (strcmp(keyid,"csc-xml")==0) {
-		_d_msg(DEBUG_INFO, "csc xml for rpm\n");
+		_LOGD("csc xml for rpm\n");
 		ret = _rpm_process_cscxml(pkgid);
 		if (ret != 0) {
-			_d_msg(DEBUG_ERR, "install csc xml failed with err(%d)\n", ret);
+			_LOGE("install csc xml failed with err(%d)\n", ret);
 		} else {
-			_d_msg(DEBUG_INFO, "install csc xml success\n");
+			_LOGD("install csc xml success\n");
 		}
+
+	/*check csc coretpk*/
+	} else if (strcmp(keyid,"csc-core")==0) {
+		_LOGD("csc for coretpk\n");
+		ret = _rpm_process_csc_coretpk(pkgid);
+		if (ret != 0) {
+			_LOGE("install coretpk csc failed with err(%d)\n", ret);
+		} else {
+			_LOGD("install coretpk csc success\n");
+		}
+
 	/*check fota*/
 	} else if (strcmp(keyid,"rpm-fota")==0) {
-		_d_msg(DEBUG_INFO, "fota process for rpm\n");
+		_LOGD("fota process for rpm\n");
 		ret = _rpm_process_fota(pkgid);
 		if (ret != 0) {
-			_d_msg(DEBUG_ERR, "fota process failed with err(%d)\n", ret);
+			_LOGE("fota process failed with err(%d)\n", ret);
 		} else {
-			_d_msg(DEBUG_INFO, "fota process success\n");
+			_LOGD("fota process success\n");
 		}
 	/*check fota*/
 	} else if (strcmp(keyid,"rpm-rw-fota")==0) {
-		_d_msg(DEBUG_INFO, "rw fota process for rpm\n");
+		_LOGD("rw fota process for rpm\n");
 		ret = _rpm_process_fota_for_rw(pkgid);
 		if (ret != 0) {
-			_d_msg(DEBUG_ERR, "rw fota process failed with err(%d)\n", ret);
+			_LOGE("rw fota process failed with err(%d)\n", ret);
 		} else {
-			_d_msg(DEBUG_INFO, "rw fota process success\n");
+			_LOGD("rw fota process success\n");
 		}
 	} else {
-		_d_msg(DEBUG_ERR, "smack cmd error\n");
+		_LOGE("smack cmd error\n");
 		ret = -1;
 	}
 
 	return ret;
 }
 
-int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
+int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand, char *clientid)
 {
 	int ret = -1;
 	ri_backend_data data = { 0 };
 	int backendstate;
 	rpmRC rc;
 	if (reqcommand == NULL) {
-		_d_msg(DEBUG_ERR, "reqcommand is NULL\n");
+		_LOGE("reqcommand is NULL\n");
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	}
 	if (keyid == NULL || pkgid == NULL) {
 		if (strncmp(reqcommand, "recover", strlen("recover"))) {
-			_d_msg(DEBUG_ERR, " Either keyid/pkgid is NULL\n");
+			_LOGE(" Either keyid/pkgid is NULL\n");
 			return RPM_INSTALLER_ERR_WRONG_PARAM;
 		}
+		_LOGE(" Either keyid/pkgid is NULL\n");
+		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	}
 
 	if (strncmp(reqcommand, "install", strlen("install")) == 0) {
 		data.req_cmd = INSTALL_CMD;
 		data.cmd_string = strdup("install");
 		if (data.cmd_string == NULL) {
-			_d_msg(DEBUG_ERR,
+			_LOGE(
 			       "strdup failed due to insufficient memory\n");
 			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
@@ -390,7 +494,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		data.req_cmd = DELETE_CMD;
 		data.cmd_string = strdup("uninstall");
 		if (data.cmd_string == NULL) {
-			_d_msg(DEBUG_ERR,
+			_LOGE(
 			       "strdup failed due to insufficient memory\n");
 			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
@@ -398,7 +502,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		data.req_cmd = RECOVER_CMD;
 		data.cmd_string = strdup("recover");
 		if (data.cmd_string == NULL) {
-			_d_msg(DEBUG_ERR,
+			_LOGE(
 			       "strdup failed due to insufficient memory\n");
 			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
@@ -406,7 +510,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		data.req_cmd = CLEARDATA_CMD;
 		data.cmd_string = strdup("cleardata");
 		if (data.cmd_string == NULL) {
-			_d_msg(DEBUG_ERR,
+			_LOGE(
 			       "strdup failed due to insufficient memory\n");
 			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
@@ -414,16 +518,20 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		data.req_cmd = MOVE_CMD;
 		data.cmd_string = strdup("move");
 		if (data.cmd_string == NULL) {
-			_d_msg(DEBUG_ERR,
+			_LOGE(
 			       "strdup failed due to insufficient memory\n");
 			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
 		}
 	} else if (strncmp(reqcommand, "smack", strlen("smack")) == 0) {
 		return __ri_process_smack(keyid, pkgid);
 	} else if (strncmp(reqcommand, "eflwgt-install", strlen("eflwgt-install")) == 0) {
-		return _rpm_installer_package_install_with_dbpath(pkgid);
-	} else if (strncmp(reqcommand, "eflwgt-remove", strlen("eflwgt-remove")) == 0) {
-		return _rpm_installer_package_uninstall_with_dbpath(pkgid);
+		data.req_cmd = EFLWGT_INSTALL_CMD;
+		data.cmd_string = strdup("eflwgt-install");
+		if (data.cmd_string == NULL) {
+			_LOGE(
+				"strdup failed due to insufficient memory\n");
+			return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
+		}
 	} else if (strncmp(reqcommand, "rpm-enable", strlen("rpm-enable")) == 0) {
 		if (strstr(pkgid, ":") == NULL)
 			ret = _rpm_process_enable(pkgid);
@@ -437,8 +545,8 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 			ret = _rpm_process_disabled_list(pkgid);
 		return ret;
 	} else {
-		_d_msg(DEBUG_INFO, "wrong input parameter\n");
-		_d_msg(DEBUG_RESULT, "%d\n", RPM_INSTALLER_ERR_WRONG_PARAM);
+		_LOGD("wrong input parameter\n");
+		_LOGD("%d\n", RPM_INSTALLER_ERR_WRONG_PARAM);
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	}
 
@@ -447,9 +555,9 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 
 	rc = rpmReadConfigFiles(NULL, NULL);
 	if (rc == RPMRC_OK) {
-		_d_msg(DEBUG_INFO, "Successfully read rpm configuration\n");
+		_LOGD("Successfully read rpm configuration\n");
 	} else {
-		_d_msg(DEBUG_ERR, "Unable to read RPM configuration.\n");
+		_LOGE("Unable to read RPM configuration.\n");
 		if (data.cmd_string) {
 			free(data.cmd_string);
 			data.cmd_string = NULL;
@@ -465,30 +573,30 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 			lastbackstate = _ri_get_backend_state_info();
 
 			if (REQUEST_COMPLETED == lastbackstate) {
-				_d_msg(DEBUG_INFO,
+				_LOGD(
 				       " Rpm Installer recovery is in REQUEST_COMPLETED  \n");
 				snprintf(scrolllabel, sizeof(scrolllabel),
 					 "No Recovery Needed");
-			} else
+			} else{
 				ret = __ri_native_recovery(lastbackstate);
-			if (ret == 0)
-				snprintf(scrolllabel, sizeof(scrolllabel),
-					 "Recovery Success");
-			else
-				snprintf(scrolllabel, sizeof(scrolllabel),
-					"Recovery Failed");
-
+				if (ret == 0)
+					snprintf(scrolllabel, sizeof(scrolllabel),
+						 "Recovery Success");
+				else
+					snprintf(scrolllabel, sizeof(scrolllabel),
+						"Recovery Failed");
+			}
 			/* set the backend state as completed */
 			_ri_set_backend_state(1);
 		} else {
 			/* nothing to recover */
-			_d_msg(DEBUG_INFO,
+			_LOGD(
 			       " Rpm Installer recovery Nothing to be done\n");
 			ret = 0;
 			snprintf(scrolllabel, sizeof(scrolllabel),
 				 "No Recovery Needed");
 		}
-		_d_msg(DEBUG_RESULT, "%d\n", ret);
+		_LOGD("%d\n", ret);
 		if (data.cmd_string) {
 			free(data.cmd_string);
 			data.cmd_string = NULL;
@@ -507,25 +615,25 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		if (__ri_is_another_instance_running(RPM)) {
 			if (data.pkgid) {
 				_ri_broadcast_status_notification
-				    (data.pkgid, "error",
+				    (data.pkgid, "rpm", "error",
 				     "Another Instance Running");
 				_ri_stat_cb(data.pkgid, "error",
 					    "Another Instance Running");
 				_ri_broadcast_status_notification
-				    (data.pkgid, "end", "fail");
+				    (data.pkgid, "rpm", "end", "fail");
 				_ri_stat_cb(data.pkgid, "end",
 					    "fail");
 			} else {
 				_ri_broadcast_status_notification
-				    ("unknown", "error",
+				    ("unknown", "unknown", "error",
 				     "Another Instance Running");
 				_ri_stat_cb("unknown", "error",
 					    "Another Instance Running");
 				_ri_broadcast_status_notification
-				    ("unknown", "end", "fail");
+				    ("unknown", "unknown", "end", "fail");
 				_ri_stat_cb("unknown", "end", "fail");
 			}
-			_d_msg(DEBUG_INFO,
+			_LOGD(
 			       "Request Failed as "
 			       "Another Instance is running \n");
 			ret = RPM_INSTALLER_ERR_RESOURCE_BUSY;
@@ -541,21 +649,21 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 			lastbackstate = _ri_get_backend_state_info();
 
 			/* Publish Notification that backend has started */
-//			_ri_broadcast_status_notification(data.pkgid, "start", data.cmd_string);
-//			_ri_broadcast_status_notification(data.pkgid, "command", data.cmd_string);
+//			_ri_broadcast_status_notification(data.pkgid, "rpm", "start", data.cmd_string);
+//			_ri_broadcast_status_notification(data.pkgid, "rpm", "command", data.cmd_string);
 
 			if (REQUEST_COMPLETED == lastbackstate) {
-				_d_msg(DEBUG_INFO,
+				_LOGD(
 				       " Rpm Installer recovery"
 				       " is in REQUEST_COMPLETED  \n");
 				ret = 0;
 			} else
 				ret = __ri_native_recovery(lastbackstate);
 			if (ret != 0) {
-				_d_msg(DEBUG_INFO,
+				_LOGD(
 					"recovery of last request failed\n");
 			} else {
-				_d_msg(DEBUG_INFO,
+				_LOGD(
 				       "recovery of last request success\n");
 			}
 
@@ -572,7 +680,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 
 	/* Publish Notification that backend has started */
 	if (data.pkgid)
-		_ri_broadcast_status_notification(data.pkgid, "start",
+		_ri_broadcast_status_notification(data.pkgid, "rpm", "start",
 						  data.cmd_string);
 	else
 		_ri_broadcast_status_notification("unknown", "start",
@@ -582,120 +690,82 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 	_ri_set_backend_state_info(REQUEST_ACCEPTED);
 
 	/* Set the input request info */
+	if(data.pkgid == NULL)
+		return RPM_INSTALLER_ERR_PKG_NOT_FOUND;
 	_ri_save_last_input_info(data.pkgid, data.req_cmd,
-				 data.force_overwrite);
+					 data.force_overwrite);
 
 	switch (data.req_cmd) {
 	case INSTALL_CMD:
 		{
-			_d_msg(DEBUG_INFO, "[%s] --install %s\n",
+			_LOGD("[%s] --install %s\n",
 			       "backend", data.pkgid);
 #ifdef SEND_PKGPATH
-			_ri_broadcast_status_notification(data.pkgid,
+			_ri_broadcast_status_notification(data.pkgid, "rpm",
 							  "command", "Install");
 #endif
 			if (data.force_overwrite == FORCE_OVERWITE) {
-				_d_msg(DEBUG_INFO,
+				_LOGD(
 				       "[%s] --install %s --force-overwrite\n",
 				       "backend", data.pkgid);
 				ret =
 				    _rpm_installer_package_install
-				    (data.pkgid, true, "--force");
+				    (data.pkgid, true, "--force", clientid);
 			} else {
 				if(data.pkgid == NULL) {
-					_d_msg(DEBUG_ERR, "pkgid is null");
+					_LOGE("pkgid is null");
 					break;
 				}
-				_d_msg(DEBUG_INFO, "[%s] --install %s\n",
+				_LOGD("[%s] --install %s\n",
 				       "backend", data.pkgid);
 				ret =
 				    _rpm_installer_package_install
-				    (data.pkgid, false, NULL);
-			}
-			if (ret == RPM_INSTALLER_ERR_NEED_USER_CONFIRMATION) {
-				break;
-			} else if (ret == RPM_INSTALLER_SUCCESS) {
-				_d_msg(DEBUG_INFO, "install success\n");
-				_ri_broadcast_status_notification(data.pkgid,
-								  "end", "ok");
-				_ri_stat_cb(data.pkgid, "end", "ok");
-			} else {
-
-				char *errstr = NULL;
-				_ri_error_no_to_string(ret, &errstr);
-				_ri_broadcast_status_notification(data.pkgid,
-								  "error",
-								  errstr);
-				_ri_stat_cb(data.pkgid, "error", errstr);
-				_ri_broadcast_status_notification(data.pkgid,
-								  "end",
-								  "fail");
-				sleep(2);
-				_ri_stat_cb(data.pkgid, "end", "fail");
-				_d_msg(DEBUG_ERR,
-				       "install failed with err(%d) (%s)\n",
-				       ret, errstr);
+				    (data.pkgid, false, NULL, clientid);
 			}
 		}
 		break;
 	case DELETE_CMD:
 		{
-			_d_msg(DEBUG_INFO, "[%s] uninstall %s\n",
+			_LOGD("[%s] uninstall %s\n",
 			       "backend", data.pkgid);
 #ifdef SEND_PKGPATH
-			_ri_broadcast_status_notification(data.pkgid,
+			_ri_broadcast_status_notification(data.pkgid, "rpm",
 							  "command", "Remove");
 #endif
 			ret = __ri_uninstall_package(data.pkgid);
 			if (ret != 0) {
-				char *errstr = NULL;
-				_ri_error_no_to_string(ret, &errstr);
-				_ri_broadcast_status_notification(data.pkgid,
-								  "error",
-								  errstr);
-				_ri_stat_cb(data.pkgid, "error", errstr);
-				sleep(2);
-				_ri_broadcast_status_notification(data.pkgid,
-								  "end",
-								  "fail");
-				_ri_stat_cb(data.pkgid, "end", "fail");
-				_d_msg(DEBUG_ERR,
-				       "remove failed with err(%d) (%s)\n",
-				       ret, errstr);
+				_LOGD("remove fail\n");
 			} else {
-				_d_msg(DEBUG_INFO, "remove success\n");
-				_ri_broadcast_status_notification(data.pkgid,
-								  "end", "ok");
-				_ri_stat_cb(data.pkgid, "end", "ok");
+				_LOGD("remove success\n");
 			}
 		}
 		break;
 	case CLEARDATA_CMD:
 		{
-			_d_msg(DEBUG_INFO, "[%s] clear data %s\n",
+			_LOGD("[%s] clear data %s\n",
 			       "backend", data.pkgid);
 #ifdef SEND_PKGPATH
-			_ri_broadcast_status_notification(data.pkgid,
+			_ri_broadcast_status_notification(data.pkgid, "rpm",
 							  "command", "clear");
 #endif
 			ret = __ri_clear_private_data(data.pkgid);
 			if (ret != 0) {
 				char *errstr = NULL;
 				_ri_error_no_to_string(ret, &errstr);
-				_ri_broadcast_status_notification(data.pkgid,
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
 								  "error",
 								  errstr);
 				_ri_stat_cb(data.pkgid, "error", errstr);
-				_ri_broadcast_status_notification(data.pkgid,
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
 								  "end",
 								  "fail");
 				_ri_stat_cb(data.pkgid, "end", "fail");
-				_d_msg(DEBUG_ERR,
+				_LOGE(
 				       "clear data failed with err(%d) (%s)\n",
 				       ret, errstr);
 			} else {
-				_d_msg(DEBUG_INFO, "clear data success\n");
-				_ri_broadcast_status_notification(data.pkgid,
+				_LOGD("clear data success\n");
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
 								  "end", "ok");
 				_ri_stat_cb(data.pkgid, "end", "ok");
 			}
@@ -703,47 +773,82 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		}
 	case MOVE_CMD:
 		{
-			_d_msg(DEBUG_INFO, "[%s] move %s\n",
+			_LOGD("[%s] move %s\n",
 			       "backend", data.pkgid);
 #ifdef SEND_PKGPATH
-			_ri_broadcast_status_notification(data.pkgid,
+			_ri_broadcast_status_notification(data.pkgid, "rpm",
 							  "command", "move");
 #endif
 			ret = __ri_move_package(data.pkgid, move_type);
 			if (ret != 0) {
 				char *errstr = NULL;
 				_ri_error_no_to_string(ret, &errstr);
-				_ri_broadcast_status_notification(data.pkgid,
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
 								  "error",
 								  errstr);
 				_ri_stat_cb(data.pkgid, "error", errstr);
-				_ri_broadcast_status_notification(data.pkgid,
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
 								  "end",
 								  "fail");
 				_ri_stat_cb(data.pkgid, "end", "fail");
-				_d_msg(DEBUG_ERR,
+				_LOGE(
 				       "move failed with err(%d) (%s)\n",
 				       ret, errstr);
 			} else {
-				_d_msg(DEBUG_INFO, "move success\n");
-				_ri_broadcast_status_notification(data.pkgid,
+				_LOGD("move success\n");
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
 								  "end", "ok");
 				_ri_stat_cb(data.pkgid, "end", "ok");
 			}
 			break;
 		}
+		case EFLWGT_INSTALL_CMD:
+			{
+
+			_LOGD("[%s] eflwgt-install %s\n",
+						   "backend", data.pkgid);
+#ifdef SEND_PKGPATH
+			_ri_broadcast_status_notification(data.pkgid, "rpm",
+								  "command", "eflwgt-install");
+#endif
+			ret = _rpm_installer_package_install_with_dbpath(data.pkgid, clientid);
+			if (ret != 0) {
+				char *errstr = NULL;
+				_ri_error_no_to_string(ret, &errstr);
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
+									  "error",
+									  errstr);
+				_ri_stat_cb(data.pkgid, "error", errstr);
+				sleep(2);
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
+								  "end",
+								  "fail");
+				_ri_stat_cb(data.pkgid, "end", "fail");
+				_LOGE("eflwgt-install failed with err(%d) (%s)\n",
+						   ret, errstr);
+			} else {
+				_LOGD("eflwgt-install success\n");
+				_ri_broadcast_status_notification(data.pkgid, "rpm",
+								  "end", "ok");
+				_ri_stat_cb(data.pkgid, "end", "ok");
+			}
+				_ri_remove_wgt_unzip_dir();
+				break;
+			}
 
 	default:
 		{
-			_ri_broadcast_status_notification("unknown", "command",
+			_ri_broadcast_status_notification("unknown", "unknown",
+							  "command",
 							  "unknown");
-			_ri_broadcast_status_notification("unknown", "error",
+			_ri_broadcast_status_notification("unknown", "unknown",
+							  "error",
 							  "not supported");
 			_ri_stat_cb("unknown", "error", "not supported");
-			_ri_broadcast_status_notification("unknown",
+			_ri_broadcast_status_notification("unknown", "unknown",
 							  "end", "fail");
 			_ri_stat_cb("unknown", "end", "fail");
-			_d_msg(DEBUG_ERR, "unknown command \n");
+			_LOGE("unknown command \n");
 			ret = RPM_INSTALLER_ERR_WRONG_PARAM;
 		}
 	}
@@ -762,8 +867,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand)
 		_ri_set_backend_state_info(REQUEST_COMPLETED);
 		/* set the backend state as completed */
 		_ri_set_backend_state(1);
-		_d_msg(DEBUG_INFO, "%d\n", ret);
-		_d_msg_deinit();
+		_LOGD("%d\n", ret);
 	}
 	return ret;
 }

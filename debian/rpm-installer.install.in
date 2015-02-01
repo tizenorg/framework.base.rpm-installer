@@ -10,4 +10,6 @@
 @PREFIX@/bin/query_rpm_package.sh
 @PREFIX@/bin/cpio_rpm_package.sh.in
 @PREFIX@/bin/cpio_rpm_package_update_xml.sh.in
+@PREFIX@/bin/coretpk_update_xml.sh.in
+@PREFIX@/bin/rpm_update_xml.sh.in
 @PREFIX@/usr/share/data

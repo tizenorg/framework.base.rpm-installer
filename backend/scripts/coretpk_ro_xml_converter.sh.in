@@ -1,0 +1,91 @@
+#!/bin/sh
+INPUT=$1
+OUTPUT=$2
+PKGID=$3
+CLIENTID=$4
+
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]
+then
+	echo "error!"
+	exit 2
+fi
+
+if [ $(grep -c " exec=\"/usr/" $INPUT) -gt 0 ] || [ $(grep -c "<icon>/usr/" $INPUT) -gt 0 ]
+then
+	exit 44
+fi
+
+if [ $(grep -c "install-location=" $INPUT) -gt 0 ]
+then
+	INSTALLLOCATION=1
+fi
+
+
+if [ -n "$4" ]
+then
+	if [ $(grep -c "<service-application" $INPUT) -gt 0 ]
+	then
+		if [ $INSTALLLOCATION -eq 1 ]
+		then
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e	"s#\(<manifest[^>]*\)>#\1 storeclient-id=\"$CLIENTID\">#" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		else
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e "s#\(<manifest[^>]*\)>#\1 install-location=\"internal-only\">#" \
+						-e	"s#\(<manifest[^>]*\)>#\1 storeclient-id=\"$CLIENTID\">#" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		fi
+	else
+		if [ $INSTALLLOCATION -eq 1 ]
+		then
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e	"s#\(<manifest[^>]*\)>#\1 storeclient-id=\"$CLIENTID\">#" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		else
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e "s#\(<manifest[^>]*\)>#\1 install-location=\"auto\">#" \
+						-e	"s#\(<manifest[^>]*\)>#\1 storeclient-id=\"$CLIENTID\">#" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		fi
+	fi
+else
+	if [ $(grep -c "<service-application" $INPUT) -gt 0 ]
+	then
+		if [ $INSTALLLOCATION -eq 1 ]
+		then
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		else
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e "s#\(<manifest[^>]*\)>#\1 install-location=\"internal-only\">#" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		fi
+	else
+		if [ $INSTALLLOCATION -eq 1 ]
+		then
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		else
+			/bin/sed	-e	"s#<icon>#<icon>/usr/apps/$PKGID/shared/res/#g" \
+						-e	"s#exec=\"#exec=\"/usr/apps/$PKGID/bin/#g" \
+						-e "/<feature.*>/ d" -e "/<feature /,/<\/feature>/ d" \
+						-e "s#\(<manifest[^>]*\)>#\1 install-location=\"auto\">#" \
+						-e "s#package=\"#type=\"coretpk\" package=\"#g" $INPUT > $OUTPUT
+		fi
+	fi
+fi
