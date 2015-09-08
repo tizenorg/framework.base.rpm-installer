@@ -8,7 +8,7 @@ PKG_LOG_DIR=/var/pkgmgr/rpm
 
 
 debug () {
-	echo ">>$DEBUG" >> /tmp/rpmscriptlog
+	/bin/echo ">>$DEBUG" >> /tmp/rpmscriptlog
 }
 
 NOARG=$#
@@ -28,11 +28,12 @@ fi
 
 if [ ! -d $PKG_LOG_DIR ];then
 	DEBUG="$PKG_LOG_DIR not exist -> mkdir(ok)";debug
-	mkdir -p $PKG_LOG_DIR
+	/bin/mkdir -p $PKG_LOG_DIR
 fi
 
 
-rpm --upgrade --percent --nodeps --replacepkgs $OPTION_FLAGS "$PKGFILE_PATH"
+#rpm --upgrade --percent --nodeps --replacepkgs $OPTION_FLAGS "$PKGFILE_PATH"
+/bin/rpm --upgrade --percent --nodeps --replacepkgs --force "$PKGFILE_PATH"
 rpmretval=$?
 if [ $rpmretval -ne 0 ]; then
 	DEBUG="rpm returned error ";debug

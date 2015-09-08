@@ -31,8 +31,8 @@ if [ ! -d $PKG_LOG_DIR ];then
 	/bin/mkdir -p $PKG_LOG_DIR
 fi
 
-
-/bin/rpm --install --percent --nodeps --force $OPTION_FLAGS "$PKGFILE_PATH"
+echo /bin/rpm --upgrade --percent --nodeps --replacepkgs --force "$PKGFILE_PATH" --dbpath="/opt/usr/rpmdb_tmp"
+/bin/rpm --upgrade --percent --nodeps --replacepkgs --force "$PKGFILE_PATH" --dbpath="/opt/usr/rpmdb_tmp"
 rpmretval=$?
 if [ $rpmretval -ne 0 ]; then
 	DEBUG="rpm returned error ";debug

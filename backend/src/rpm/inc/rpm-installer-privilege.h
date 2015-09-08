@@ -20,37 +20,23 @@
  *
  */
 
-
-#include <package-manager-plugin.h>
-#include <unistd.h>
-#include <vconf.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <dirent.h>
+#ifndef __RPM_INSTALLER_PRIVILEGE_H_
+#define __RPM_INSTALLER_PRIVILEGE_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif				/* __cplusplus */
 
-#define API __attribute__ ((visibility("default")))
-#define DEBUG_ERR	0x0001
-#define DEBUG_INFO	0x0002
-#define DEBUG_RESULT	0x0004
-#define LIBRPM_LOG	1
-#define LIBRPM_SUCCESS	0
-#define LIBRPM_ERROR	-1
-
-#define BLOCK_SIZE      4096 /*in bytes*/
-#define LIKELY(expr) __builtin_expect((expr), 1)
-#define UNLIKELY(expr) __builtin_expect((expr), 0)
-
-int _librpm_get_package_header_info(const char *pkg_path,
-			package_manager_pkg_detail_info_t *pkg_detail_info);
-int _librpm_get_installed_package_info(const char *pkgid,
-			package_manager_pkg_detail_info_t *pkg_detail_info);
-int _librpm_app_is_installed(const char *pkgid);
-long long _librpm_calculate_dir_size(const char *dirname);
+int _ri_privilege_register_package(const char *pkgid);
+int _ri_privilege_unregister_package(const char *pkgid);
+int _ri_privilege_revoke_permissions(const char *pkgid);
+int _ri_privilege_set_package_version(const char *pkgid, const char *version);
+int _ri_privilege_enable_permissions(const char *pkgid, int apptype, const char **perms, int persistent);
+int _ri_privilege_setup_path(const char *pkgid, const char *dirpath, int apppathtype, const char *groupid);
+int _ri_privilege_add_friend(const char *pkgid1, const char *pkgid2);
+int _ri_privilege_change_smack_label(const char *path, const char *label,	int label_type);
 
 #ifdef __cplusplus
 }
-#endif			/* __cplusplus */
+#endif				/* __cplusplus */
+#endif				/* __RPM_INSTALLER_PRIVILEGE_H_ */

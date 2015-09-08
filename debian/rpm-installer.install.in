@@ -1,7 +1,15 @@
 @PREFIX@/lib/rpm-installer/librpm-util.a
 @PREFIX@/bin/rpm-backend
 @PREFIX@/bin/install_rpm_package.sh
+@PREFIX@/bin/install_rpm_package_with_dbpath_ro.sh
+@PREFIX@/bin/install_rpm_package_with_dbpath_rw.sh
 @PREFIX@/bin/uninstall_rpm_package.sh
 @PREFIX@/bin/upgrade_rpm_package.sh
+@PREFIX@/bin/upgrade_rpm_package_with_dbpath_ro.sh
+@PREFIX@/bin/upgrade_rpm_package_with_dbpath_rw.sh
 @PREFIX@/bin/query_rpm_package.sh
+@PREFIX@/bin/cpio_rpm_package.sh.in
+@PREFIX@/bin/cpio_rpm_package_update_xml.sh.in
+@PREFIX@/bin/coretpk_update_xml.sh.in
+@PREFIX@/bin/rpm_update_xml.sh.in
 @PREFIX@/usr/share/data

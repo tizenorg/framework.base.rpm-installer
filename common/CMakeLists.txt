@@ -16,7 +16,7 @@ FOREACH(flag ${pkgs_CFLAGS})
 	SET(pkgs_CFLAGS_str "${pkgs_CFLAGS_str} ${flag}")
 ENDFOREACH(flag)
 
-pkg_check_modules(libpkgs REQUIRED dbus-glib-1 db-util vconf sqlite3 dlog)
+pkg_check_modules(libpkgs REQUIRED libxml-2.0 dbus-glib-1 db-util vconf sqlite3 dlog)
 
 FOREACH(flag ${libpkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")

@@ -10,7 +10,7 @@ CURDIR=`pwd`
 echo $CURDIR >> /tmp/rpmscriptlog
 
 debug () {
-	echo ">>$DEBUG" >> /tmp/rpmscriptlog
+	/bin/echo ">>$DEBUG" >> /tmp/rpmscriptlog
 }
 
 if [ $# -ne 1 ];then
@@ -19,19 +19,19 @@ if [ $# -ne 1 ];then
 fi
 
 PKGNAME=$1
-echo "pkg name = $PKGNAME" >> /tmp/rpmscriptlog
+/bin/echo "pkg name = $PKGNAME" >> /tmp/rpmscriptlog
 
 PKG_LOG_DIR=/var/pkgmgr/$PKGNAME
 if [ ! -d $PKG_LOG_DIR ];then
 	DEBUG="$PKG_LOG_DIR not exist -> mkdir(ok)";debug
-	mkdir -p $PKG_LOG_DIR
+	/bin/mkdir -p $PKG_LOG_DIR
 fi
 
 if [ -f $PKGNAME ]; then
-	rpm -qpi $PKGNAME
+	/bin/rpm -qpi $PKGNAME
 	retval=$?
 else
-	rpm -qi $PKGNAME
+	/bin/rpm -qi $PKGNAME
 	retval=$?
 fi
 echo "retval = $retval" >> /tmp/rpmscriptlog

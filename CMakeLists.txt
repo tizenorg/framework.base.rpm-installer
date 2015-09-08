@@ -16,11 +16,12 @@ SET(VERSION 1.0)
 
 set(CMAKE_SKIP_BUILD_RPATH true)
 
+configure_file(rpm_installer_deactvation_list.txt.in rpm_installer_deactvation_list.txt @ONLY)
+INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/rpm_installer_deactvation_list.txt DESTINATION /opt/share/packages/.pkgmgr/rpm-installer/)
+
 ##################
 ## build comm libraries
 add_subdirectory(common)
 add_subdirectory(frontend)
-add_subdirectory(po)
 add_subdirectory(backend-lib)
 ##################
-

@@ -55,7 +55,7 @@ clean:
 	rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
 	cd backend && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
 	cd backend-lib && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb
-	rm -f backend/install_rpm_package.sh  backend/uninstall_rpm_package.sh  backend/upgrade_rpm_package.sh backend/query_rpm__package.sh
+	rm -f backend/install_rpm_package.sh  backend/install_rpm_package_with_dbpath_ro.sh  backend/install_rpm_package_with_dbpath_rw.sh  backend/uninstall_rpm_package.sh  backend/upgrade_rpm_package.sh  backend/upgrade_rpm_package_with_dbpath_ro.sh  backend/upgrade_rpm_package_with_dbpath_rw.sh  backend/query_rpm__package.sh  backend/cpio_rpm_package.sh  backend/cpio_rpm_package_update_xml.sh backend/coretpk_update_xml.sh backend/rpm_update_xml.sh
 	cd frontend && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb *.sh rpm-backend
 	cd common && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb *.a
 	cd frontend && rm -rf Makefile CMakeCache.txt CMakeFiles cmake_install.cmake install_manifest.txt *.deb

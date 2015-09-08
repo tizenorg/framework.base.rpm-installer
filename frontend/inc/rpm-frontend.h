@@ -23,7 +23,6 @@
 #ifndef __RPM_FRONTEND_H_
 #define __RPM_FRONTEND_H_
 
-#include <Elementary.h>
 #include <pkgmgr_installer.h>
 #include <bundle.h>
 
@@ -39,6 +38,8 @@
 #define PACKAGE	"rpm-installer"
 #endif				/* PACKAGE */
 
+#define RPM_INSTALLER_VERSION "20141016.1"
+
 enum command {
 	INVALID_CMD = -1,
 	INSTALL_CMD = 1,
@@ -46,13 +47,23 @@ enum command {
 	UPDATE_CMD = 3,
 	RECOVER_CMD = 4,
 	CLEARDATA_CMD = 5,
+	MOVE_CMD = 6,
+	SMACK_CMD = 7,
+	EFLWGT_INSTALL_CMD = 8,
+	ENABLE_CMD = 9,
+	DISABLE_CMD = 10,
+	CORETPK_INSTALL_CMD = 11,
+	CORETPK_DIRECTORY_INSTALL_CMD = 12,
+	CORETPK_REINSTALL_CMD = 13,
+	RPM_CMD_MAX = 14,
 };
 
 struct ri_frontend_cmdline_arg_t {
 	int req_cmd;
-	char *pkg_name;
+	char *pkgid;
 	char *keyid;
-	int quiet;
+	int move_type;
+	char *clientid;
 };
 typedef struct ri_frontend_cmdline_arg_t ri_frontend_cmdline_arg;
 
@@ -63,25 +74,12 @@ struct ri_frontend_data_t {
 };
 typedef struct ri_frontend_data_t ri_frontend_data;
 
-struct appdata {
-	Evas *evas;
-	Evas_Object *win_main;
-	Evas_Coord root_w;
-	Evas_Coord root_h;
-	Evas_Object *main_view;	/* for main view layout */
-	Evas_Object *scrollbar_label;
-};
 
-int app_create(void *user_data);
-int app_terminate(void *user_data);
-int app_pause(void *user_data);
-int app_resume(void *user_data);
-int app_reset(bundle *b, void *user_data);
-int app_rotation(enum appcore_rm, void *user_data);
 
 int _ri_cmdline_destroy(ri_frontend_data *data);
 int _ri_cmdline_process(ri_frontend_data *data);
+int _ri_parse_hybrid(int argc, char **argv);
 int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data);
-void _ri_stat_cb(const char *pkg_name, const char *key, const char *val);
+void _ri_stat_cb(const char *pkgid, const char *key, const char *val);
 
 #endif				/* __RPM_FRONTEND_H_ */
