@@ -29,217 +29,163 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <regex.h>
-#include <dlog.h>
-/*rpm specific headers*/
-#include <rpmlib.h>
-#include <header.h>
-#include <rpmts.h>
-#include <rpmdb.h>
-#include <rpmlog.h>
+
+#include "pkgmgr-info.h"
 
 #include "librpminternals.h"
-#include "rpm-installer-util.h"
+#include "installer-type.h"
 
 int _librpm_app_is_installed(const char *pkgid)
 {
-	rpmts ts = NULL;
-	int ret = 0;
-        int found = 0;
-        rpmdbMatchIterator mi;
+	int ret;
+	pkgmgrinfo_pkginfo_h handle = NULL;
 
-        ts = rpmtsCreate();
-        mi = rpmtsInitIterator(ts, RPMTAG_NAME, pkgid, 0);
-        while (NULL != rpmdbNextIterator(mi)) {
-		found = 1;
-	}
-
-	if (found == 0) {
-		_LOGD("Package not found in DB\n");
+	/*Get handle */
+	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
+	if (ret != PMINFO_R_OK) {
 		ret = 0;
-		goto err;
+		_LOGD("%s:App not installed", pkgid);
+	} else {
+		ret = 1;
+		_LOGD("%s:App Installed", pkgid);
 	}
-	else {
-		 _LOGD("Package found in DB\n");
-                ret = 1;
-		goto err;
-	}
-err:
-	rpmtsFree(ts);
-	rpmdbFreeIterator(mi);
+
+	if (handle)
+		pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
+
 	return ret;
 }
 
-int _librpm_get_installed_package_info(const char *pkgid,
-                        package_manager_pkg_detail_info_t *pkg_detail_info)
+int _librpm_get_installed_package_info(const char *pkgid, package_manager_pkg_detail_info_t * pkg_detail_info)
 {
-	rpmts ts = NULL;
-        Header hdr = NULL;
-        int found = 0;
-	int ret = 0;
-        rpmdbMatchIterator mi;
-        rpmtd td, tn, tv, ta;
+	int ret;
+	pkgmgrinfo_pkginfo_h handle = NULL;
+	char *temp = NULL;
+	long long temp_size = 0;
+	long long data_size = 0;
+	char data_path[BUF_SIZE] = { 0, };
 
-        td = rpmtdNew();
-        tn = rpmtdNew();
-        tv = rpmtdNew();
-        ta = rpmtdNew();
-        ts = rpmtsCreate();
+	/*Get handle */
+	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
+	tryvm_if(ret != PMINFO_R_OK, ret = LIBRPM_ERROR, "pkgmgrinfo_pkginfo_get_pkginfo(%s) failed.", pkgid);
+	/*Name */
+	ret = pkgmgrinfo_pkginfo_get_pkgname(handle, &temp);
+	tryvm_if(ret != PMINFO_R_OK, ret = LIBRPM_ERROR, "pkgmgrinfo_pkginfo_get_pkgname(%s) failed.", pkgid);
+	strncpy(pkg_detail_info->pkg_name, temp, PKG_NAME_STRING_LEN_MAX - 1);
+	 /*ID*/ ret = pkgmgrinfo_pkginfo_get_pkgid(handle, &temp);
+	tryvm_if(ret != PMINFO_R_OK, ret = LIBRPM_ERROR, "pkgmgrinfo_pkginfo_get_pkgid(%s) failed.", pkgid);
+	strncpy(pkg_detail_info->pkgid, temp, PKG_NAME_STRING_LEN_MAX - 1);
+	/*Version */
+	ret = pkgmgrinfo_pkginfo_get_version(handle, &temp);
+	tryvm_if(ret != PMINFO_R_OK, ret = LIBRPM_ERROR, "pkgmgrinfo_pkginfo_get_version(%s) failed.", pkgid);
+	strncpy(pkg_detail_info->version, temp, PKG_VERSION_STRING_LEN_MAX - 1);
+	/*Description */
+	ret = pkgmgrinfo_pkginfo_get_description(handle, &temp);
+	tryvm_if(ret != PMINFO_R_OK, ret = LIBRPM_ERROR, "pkgmgrinfo_pkginfo_get_description(%s) failed.", pkgid);
+	strncpy(pkg_detail_info->pkg_description, temp, PKG_VALUE_STRING_LEN_MAX - 1);
+	/*Size */
+	ret = pkgmgrinfo_pkginfo_get_root_path(handle, &temp);
+	tryvm_if(ret != PMINFO_R_OK, ret = LIBRPM_ERROR, "pkgmgrinfo_pkginfo_get_root_path(%s) failed.", pkgid);
+	snprintf(data_path, BUF_SIZE - 1, "%s/%s/data", OPT_USR_APPS, pkgid);
 
-        mi = rpmtsInitIterator(ts, RPMTAG_NAME, pkgid, 0);
-        while (NULL != (hdr = rpmdbNextIterator(mi))) {
-                hdr = headerLink(hdr);
-		found = 1;
-		break;
-        }
+	data_size = _librpm_calculate_dir_size(data_path);
+	if (data_size < 0) {
+		_LOGE("_librpm_calculate_dir_size(%s) failed.", data_path);
+		data_size = 0;
+		pkg_detail_info->data_size = 0;
 
-	/*Print the header info */
-        if (found == 0) {
-                _LOGE("Package not found in DB\n");
-                ret = LIBRPM_ERROR;
-		goto err;
-        }
-	/*Name*/
-	headerGet(hdr, RPMTAG_NAME, tn, HEADERGET_MINMEM);
-        strncpy(pkg_detail_info->pkgid, rpmtdGetString(tn), PKG_NAME_STRING_LEN_MAX-1);
-        /*Version*/
-        headerGet(hdr, RPMTAG_VERSION, tv, HEADERGET_MINMEM);
-        strncpy(pkg_detail_info->version, rpmtdGetString(tv), PKG_VERSION_STRING_LEN_MAX-1);
-        /*Description*/
-        headerGet(hdr, RPMTAG_DESCRIPTION, td, HEADERGET_MINMEM);
-        strncpy(pkg_detail_info->pkg_description, rpmtdGetString(td), PKG_VALUE_STRING_LEN_MAX-1);
-        /*Size*/
-        headerGet(hdr, RPMTAG_SIZE, ta, HEADERGET_MINMEM);
-        pkg_detail_info->app_size = rpmtdGetNumber(ta);
-	ret = LIBRPM_SUCCESS;
+	} else {
+		data_size += BLOCK_SIZE;
+		data_size /= 1024;
+		pkg_detail_info->data_size = (int)data_size;
+	}
 
-err:
-        headerFree(hdr);
-	rpmtdFreeData(tn);
-	rpmtdFree(tn);
-	rpmtdFreeData(td);
-	rpmtdFree(td);
-	rpmtdFreeData(ta);
-	rpmtdFree(ta);
-	rpmtdFreeData(tv);
-	rpmtdFree(tv);
-        rpmdbFreeIterator(mi);
-        rpmtsFree(ts);
+	temp_size = _librpm_calculate_dir_size(temp);
+	if (temp_size < 0) {
+		_LOGE("_librpm_calculate_dir_size(%s) failed.", temp);
+		temp_size = 0;
+		ret = LIBRPM_ERROR;
+	} else {
+		temp_size += BLOCK_SIZE;	/* the function does not adds 4096 bytes for the directory size itself */
+		temp_size /= 1024;
+		ret = LIBRPM_SUCCESS;
+	}
 
-        return ret;
+	if (ret == LIBRPM_SUCCESS) {
+		if (strstr(temp, OPT_USR_APPS)) {
+			pkg_detail_info->installed_size = (int)temp_size;
+			pkg_detail_info->app_size = (int)(temp_size - data_size);
+		} else {
+			pkg_detail_info->app_size = (int)temp_size;
+			pkg_detail_info->installed_size = (int)(data_size + temp_size);
+		}
+	} else {
+		pkg_detail_info->app_size = 0;
+		pkg_detail_info->installed_size = 0;
+	}
+
+ catch:
+	if (handle)
+		pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
+	return ret;
 
 }
 
-int _librpm_get_package_header_info(const char *pkg_path,
-				package_manager_pkg_detail_info_t *pkg_detail_info)
+int _librpm_get_package_header_info(const char *pkg_path, package_manager_pkg_detail_info_t * pkg_detail_info)
 {
-	int ret = 0;
-	rpmts ts = NULL;
-	rpmtd td = NULL;
-	FD_t fd;
-	rpmRC rc;
-	Header hdr = NULL;
-	rpmVSFlags vsflags = 0;
-
-	fd = Fopen(pkg_path, "r.ufdio");
-	if ((!fd) || Ferror(fd)) {
-		_LOGE("Failed to open package file (%s)\n", Fstrerror(fd));
-		ret = LIBRPM_ERROR;
-		goto err;
-	}
-
-	ts = rpmtsCreate();
-	td = rpmtdNew();
-	hdr = headerNew();
-
-	vsflags |= _RPMVSF_NODIGESTS;
-	vsflags |= _RPMVSF_NOSIGNATURES;
-	vsflags |= RPMVSF_NOHDRCHK;
-	(void) rpmtsSetVSFlags(ts, vsflags);
-
-	rc = rpmReadPackageFile(ts, fd, pkg_path, &hdr);
-	if (rc != RPMRC_OK) {
-		_LOGE("Could not read package file\n");
-		ret = LIBRPM_ERROR;
-		goto err;
-	}
-	Fclose(fd);
-	/*Name*/
-	headerGet(hdr, RPMTAG_NAME, td, HEADERGET_MINMEM);
-	strncpy(pkg_detail_info->pkgid, rpmtdGetString(td), PKG_NAME_STRING_LEN_MAX-1);
-	rpmtdReset(td);
-	/*Version*/
-	headerGet(hdr, RPMTAG_VERSION, td, HEADERGET_MINMEM);
-	strncpy(pkg_detail_info->version, rpmtdGetString(td), PKG_VERSION_STRING_LEN_MAX-1);
-	rpmtdReset(td);
-	/*Description*/
-	headerGet(hdr, RPMTAG_DESCRIPTION, td, HEADERGET_MINMEM);
-	strncpy(pkg_detail_info->pkg_description, rpmtdGetString(td), PKG_VALUE_STRING_LEN_MAX-1);
-	rpmtdReset(td);
-	/*Size*/
-	headerGet(hdr, RPMTAG_SIZE, td, HEADERGET_MINMEM);
-	pkg_detail_info->app_size = rpmtdGetNumber(td);
-
-	ret = LIBRPM_SUCCESS;
-err:
-	rpmtdFreeData(td);
-	rpmtdFree(td);
-	headerFree(hdr);
-	rpmtsFree(ts);
-	return ret;
-
+	_LOGE("librpm not using/supported");
+	return LIBRPM_ERROR;
 }
 
 long long _librpm_calculate_dir_size(const char *dirname)
 {
 	long long total = 0;
 	long long ret = 0;
-	int q = 0; /*quotient*/
-	int r = 0; /*remainder*/
+	int q = 0;					/*quotient */
+	int r = 0;					/*remainder */
 	DIR *dp = NULL;
-	struct dirent *ep = NULL;
+	struct dirent entry, *result;
 	struct stat fileinfo;
 	char abs_filename[FILENAME_MAX] = { 0, };
 	if (dirname == NULL) {
-		_LOGE(
-				"dirname is NULL");
+		_LOGE("dirname is NULL");
 		return LIBRPM_ERROR;
 	}
 	dp = opendir(dirname);
 	if (dp != NULL) {
-		while ((ep = readdir(dp)) != NULL) {
-			if (!strcmp(ep->d_name, ".") ||
-				!strcmp(ep->d_name, "..")) {
+		for (ret = readdir_r(dp, &entry, &result);
+				ret == 0 && result != NULL;
+				ret = readdir_r(dp, &entry, &result)) {
+
+			if (!strcmp(entry.d_name, ".") || !strcmp(entry.d_name, "..")) {
 				continue;
 			}
-			snprintf(abs_filename, FILENAME_MAX, "%s/%s", dirname,
-				 ep->d_name);
+			snprintf(abs_filename, FILENAME_MAX, "%s/%s", dirname, entry.d_name);
 			if (stat(abs_filename, &fileinfo) < 0)
 				perror(abs_filename);
 			else {
 				if (S_ISDIR(fileinfo.st_mode)) {
 					total += fileinfo.st_size;
-					if (strcmp(ep->d_name, ".")
-					    && strcmp(ep->d_name, "..")) {
-						ret = _librpm_calculate_dir_size
-						    (abs_filename);
+					if (strcmp(entry.d_name, ".")
+						&& strcmp(entry.d_name, "..")) {
+						ret = _librpm_calculate_dir_size(abs_filename);
 						total = total + ret;
 					}
 				} else {
 					/*It is a file. Calculate the actual
-					size occupied (in terms of 4096 blocks)*/
-				q = (fileinfo.st_size / BLOCK_SIZE);
-				r = (fileinfo.st_size % BLOCK_SIZE);
-				if (r) {
-					q = q + 1;
-				}
-				total += q * BLOCK_SIZE;
+					   size occupied (in terms of 4096 blocks) */
+					q = (fileinfo.st_size / BLOCK_SIZE);
+					r = (fileinfo.st_size % BLOCK_SIZE);
+					if (r) {
+						q = q + 1;
+					}
+					total += q * BLOCK_SIZE;
 				}
 			}
 		}
 		(void)closedir(dp);
 	} else {
-		_LOGE(
-			     "Couldn't open the directory\n");
+		_LOGE("Couldn't open the directory\n");
 		return -1;
 	}
 	return total;

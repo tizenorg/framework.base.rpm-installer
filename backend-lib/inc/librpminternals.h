@@ -33,10 +33,7 @@ extern "C" {
 #endif				/* __cplusplus */
 
 #define API __attribute__ ((visibility("default")))
-#define DEBUG_ERR	0x0001
-#define DEBUG_INFO	0x0002
-#define DEBUG_RESULT	0x0004
-#define LIBRPM_LOG	1
+
 #define LIBRPM_SUCCESS	0
 #define LIBRPM_ERROR	-1
 

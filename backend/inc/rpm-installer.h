@@ -27,9 +27,10 @@
 extern "C" {
 #endif				/* __cplusplus */
 
-#include "rpm-installer-util.h"
 #include <stdbool.h>
 #include <glib.h>
+#include "installer-type.h"
+#include "pkgmgr-info.h"
 
 #define PM_UNLIKELY(expr) __builtin_expect((expr), 0)
 #define PM_LIKELY(expr) __builtin_expect((expr), 1)
@@ -50,7 +51,7 @@ extern "C" {
 	typedef enum rpm_request_type rpm_request_type;
 
 #define MARGIN_FACTOR		12
-#define RPM_SIZE_MARGIN(size)	( (int)(size/MARGIN_FACTOR) + 1)
+#define RPM_SIZE_MARGIN(size)	((int)(size/MARGIN_FACTOR) + 1)
 
 /**
  * Install the package
@@ -74,7 +75,7 @@ extern "C" {
  * Install the package manifest
  * @in :pkgfilepath : Package manifest file path
  */
-	int _rpm_installer_corexml_install(char *pkgfilepath);
+	int _rpm_installer_corexml_install(const char *pkgfilepath);
 
 /**
  * get the package information from package name
@@ -103,8 +104,11 @@ extern "C" {
 	int _rpm_installer_package_uninstall_with_dbpath(const char *pkgid);
 
 /* Dbus related prototype */
-	void _ri_broadcast_status_notification(const char *pkgid, char *pkg_type, char *key, char *val);
+	void _ri_broadcast_status_notification(const char *pkgid, const char *pkgtype, const char *key, const char *val);
+	int _ri_init_db(const char *xml_path);
+	void _ri_broadcast_app_uninstall_notification(const char *pkgid, const char *pkgtype, const char *val);
 	int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand, char *clientid);
+	void _ri_broadcast_privilege_notification(const char *pkgid, const char *pkgtype, const char *key, const char *val);
 
 /* RPM operations prototype */
 	int _rpm_uninstall_pkg(char *pkgid);
@@ -113,14 +117,8 @@ extern "C" {
 	int _rpm_upgrade_pkg_with_dbpath(char *pkgfilepath, char *pkgid);
 	int _rpm_uninstall_pkg_with_dbpath(const char *pkgid, bool is_system);
 
-	int _rpm_install_corexml(char *pkgfilepath, char *pkgid);
+	int _rpm_install_corexml(const char *pkgfilepath, char *pkgid);
 	int _rpm_process_cscxml(char *xml_path);
-	int _rpm_process_csc_coretpk(char *xml_path);
-	int _rpm_process_fota(char *fota_script);
-	int _rpm_process_fota_for_rw(char *fota_script);
-
-	int _rpm_process_enable(char *pkgid);
-	int _rpm_process_disable(char *pkgid);
 
 	int _ri_set_backend_state(int state);
 	int _ri_get_backend_state();
@@ -136,7 +134,6 @@ extern "C" {
 
 /* libprivilege-control specific operations prototype*/
 	int _ri_privilege_register_package(const char *pkgid);
-	int _ri_privilege_set_package_version(const char *pkgid, const char *version);
 	int _ri_privilege_unregister_package(const char *pkgid);
 	int _ri_privilege_revoke_permissions(const char *pkgid);
 	int _ri_privilege_enable_permissions(const char *pkgid, int apptype,
@@ -148,26 +145,28 @@ extern "C" {
 						int label_type);
 	void _ri_unregister_cert(const char *pkgid);
 	void _ri_register_cert(const char *pkgid);
-	void _ri_apply_smack(char *pkgname, int flag);
-	int _ri_apply_privilege(char *pkgid, int visibility);
-	void _ri_soft_reset(char *pkgid);
+	void _ri_apply_smack(const char *pkgname, int flag, char *smack_label);
+	int _ri_apply_privilege(const char *pkgid, int visibility, char *smack_label);
+	void _ri_soft_reset(const char *pkgid);
+	int __get_smack_label_from_xml(const char *manifest, const char *pkgid, char **label);
+	int __get_smack_label_from_db(const char *pkgid, char **label);
 
-	int _rpm_process_enabled_list(const char *enabled_list);
-	int _rpm_process_disabled_list(const char *disabled_list);
-
-	int __is_dir(char *dirname);
-	int __ri_change_dir(char *dirname);
-	void __rpm_apply_smack(char *pkgname, int flag);
+	int __is_dir(const char *dirname);
+	int __ri_change_dir(const char *dirname);
+	void __rpm_apply_smack(const char *pkgname, int flag, char *smack_label);
 	int _rpm_xsystem(const char *argv[]);
 	int _ri_smack_reload(const char *pkgid, rpm_request_type request_type);
 	int _ri_smack_reload_all(void);
-	int _ri_verify_signatures(const char *root_path, const char *pkgid);
+	int _ri_verify_signatures(const char *root_path, const char *pkgid, bool need_verify);
 	int __ri_check_running_app(const pkgmgrinfo_appinfo_h handle, void *user_data);
 	void __ri_remove_updated_dir(const char *pkgid);
 	int __ri_copy_smack_rule_file(int op_type, const char *pkgname, int is_system);
-	void __rpm_clear_dir_list(GList* dir_list);
-	GList * __rpm_populate_dir_list();
+	void __rpm_clear_dir_list(GList *dir_list);
+	GList *__rpm_populate_dir_list();
 	void __ri_make_directory(const char *pkgid);
+
+	int __ri_privilege_perm_begin(void);
+	int __ri_privilege_perm_end(void);
 
 #ifdef __cplusplus
 }

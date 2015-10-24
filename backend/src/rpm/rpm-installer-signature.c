@@ -20,39 +20,10 @@
  *
  */
 #include <pkgmgr_parser.h>
-#include "rpm-installer-util.h"
+#include "installer-type.h"
+#include "installer-util.h"
 #include "rpm-installer-signature.h"
 
-
-static int _ri_next_child_element(xmlTextReaderPtr reader, int depth)
-{
-	int ret = xmlTextReaderRead(reader);
-	int cur = xmlTextReaderDepth(reader);
-	while (ret == 1) {
-
-		switch (xmlTextReaderNodeType(reader)) {
-		case XML_READER_TYPE_ELEMENT:
-			if (cur == depth + 1)
-				return 1;
-			break;
-		case XML_READER_TYPE_TEXT:
-			if (cur == depth + 1)
-				return 0;
-			break;
-		case XML_READER_TYPE_END_ELEMENT:
-			if (cur == depth)
-				return 0;
-			break;
-		default:
-			if (cur <= depth)
-				return 0;
-			break;
-		}
-		ret = xmlTextReaderRead(reader);
-		cur = xmlTextReaderDepth(reader);
-	}
-	return ret;
-}
 
 static void _ri_free_transform(transform_x *transform)
 {

@@ -1,6 +1,6 @@
 Name:       rpm-installer
 Summary:    Native rpm installer
-Version:    0.1.146
+Version:    0.1.213
 Release:    1
 Group:      System/Libraries
 License:    Apache-2.0
@@ -9,7 +9,6 @@ Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 BuildRequires:  cmake
 BuildRequires:  edje-bin
-BuildRequires:  rpm-devel
 BuildRequires:  popt-devel
 BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(dbus-glib-1)
@@ -33,11 +32,29 @@ BuildRequires:	pkgconfig(libprivilege-control)
 BuildRequires:  pkgconfig(capi-appfw-app-manager)
 BuildRequires:  pkgconfig(capi-security-privilege-manager)
 BuildRequires:  pkgconfig(capi-system-device)
+BuildRequires:	pkgconfig(capi-appfw-application)
 BuildRequires:	pkgconfig(aul)
 BuildRequires:  pkgconfig(openssl)
 BuildRequires:  pkgconfig(minizip)
 BuildRequires:  gettext-tools
-Requires:  /bin/cpio
+Requires:	cpio
+
+%define appfw_feature_expansion_pkg_install 1
+%define appfw_feature_delta_update 1
+%define appfw_feature_sysman_mmc 0
+%define appfw_feature_mount_install 0
+
+%if "%{?tizen_profile_name}" == "tv"
+%define appfw_feature_support_onlycap 0
+%define appfw_feature_support_debugmode_for_sdk 0
+%define appfw_feature_pkgname_restriction 0
+%define appfw_feature_directory_permission_opt_only 1
+%else
+%define appfw_feature_support_onlycap 1
+%define appfw_feature_support_debugmode_for_sdk 1
+%define appfw_feature_pkgname_restriction 1
+%define appfw_feature_directory_permission_opt_only 0
+%endif
 
 %description
 Native rpm installer
@@ -56,15 +73,72 @@ export CXXFLAGS="$CXXFLAGS ?DTIZEN_ENGINEER_MODE"
 export FFLAGS="$FFLAGS -DTIZEN_ENGINEER_MODE"
 %endif
 
+%if 0%{?appfw_feature_expansion_pkg_install}
+_EXPANSION_PKG_INSTALL=ON
+%else
+_EXPANSION_PKG_INSTALL=OFF
+%endif
+
+%if 0%{?appfw_feature_mount_install}
+_MOUNT_INSTALL=ON
+%else
+_MOUNT_INSTALL=OFF
+%endif
+
+%if 0%{?appfw_feature_delta_update}
+_DELTA_UPDATE=ON
+%else
+_DELTA_UPDATE=OFF
+%endif
+
+%if 0%{?appfw_feature_sysman_mmc}
+_SYSMAN_MMC=ON
+%else
+_SYSMAN_MMC=OFF
+%endif
+
+%if 0%{?appfw_feature_support_onlycap}
+_SUPPORT_ONLYCAP=ON
+%else
+_SUPPORT_ONLYCAP=OFF
+%endif
+
+%if 0%{?appfw_feature_support_debugmode_for_sdk}
+_SUPPORT_DEBUGMODE_FOR_SDK=ON
+%else
+_SUPPORT_DEBUGMODE_FOR_SDK=OFF
+%endif
+
+%if 0%{?appfw_feature_pkgname_restriction}
+_APPFW_FEATURE_PKGNAME_RESTRICTION=ON
+%endif
+
+%if 0%{?appfw_feature_directory_permission_opt_only}
+_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY=ON
+%else
+_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY=OFF
+%endif
+
+
 %if "%{?tizen_profile_name}" == "wearable"
 export CFLAGS="$CFLAGS -DWEARABLE"
 %else
 %if "%{?tizen_profile_name}" == "mobile"
 export CFLAGS="$CFLAGS -DMOBILE"
 %endif
+
 %endif
 
-cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix}
+cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} \
+				-DTIZEN_FULL_VERSION=%{tizen_full_version} \
+                -D_APPFW_FEATURE_EXPANSION_PKG_INSTALL:BOOL=${_EXPANSION_PKG_INSTALL} \
+				-D_APPFW_FEATURE_DELTA_UPDATE:BOOL=${_DELTA_UPDATE} \
+				-D_APPFW_FEATURE_SYSMAN_MMC:BOOL=${_SYSMAN_MMC} \
+				-D_APPFW_FEATURE_MOUNT_INSTALL:BOOL=${_MOUNT_INSTALL} \
+				-D_APPFW_FEATURE_SUPPORT_DEBUGMODE_FOR_SDK:BOOL=${_SUPPORT_DEBUGMODE_FOR_SDK} \
+				-D_APPFW_FEATURE_SUPPORT_ONLYCAP:BOOL=${_SUPPORT_ONLYCAP} \
+				-D_APPFW_FEATURE_PKGNAME_RESTRICTION:BOOL=${_APPFW_FEATURE_PKGNAME_RESTRICTION} \
+				-D_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY:BOOL=${_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY}
 
 make %{?jobs:-j%jobs}
 
@@ -78,20 +152,14 @@ cp LICENSE %{buildroot}/usr/share/license/%{name}
 %post
 mkdir -p /usr/etc/package-manager/backend
 mkdir -p /usr/etc/package-manager/backendlib
-mkdir -p /opt/share/packages/.pkgmgr/rpm-installer/
+mkdir -p /usr/etc/package-manager/rpm-installer
 
-ln -sf /usr/bin/rpm-backend /usr/etc/package-manager/backend/coretpk
 ln -sf /usr/bin/rpm-backend /usr/etc/package-manager/backend/rpm
+ln -sf /usr/bin/rpm-backend /usr/etc/package-manager/backend/coretpk
 ln -sf /usr/lib/libnativerpm.so /usr/etc/package-manager/backendlib/librpm.so
 ln -sf /usr/lib/libnativerpm.so /usr/etc/package-manager/backendlib/libcoretpk.so
 
 chmod 700 /usr/bin/rpm-backend
-
-vconftool set -t int db/private/rpm-installer/state "0" -f -s system::vconf_inhouse
-vconftool set -t int db/private/rpm-installer/stateinfo "0" -f -s system::vconf_inhouse
-vconftool set -t int db/private/rpm-installer/requestinfo/command "0" -f -s system::vconf_inhouse
-vconftool set -t string db/private/rpm-installer/requestinfo/pkgname "" -f -s system::vconf_inhouse
-vconftool set -t int db/private/rpm-installer/requestinfo/options "0" -f -s system::vconf_inhouse
 
 %files
 %manifest rpm-installer.manifest
@@ -111,5 +179,4 @@ vconftool set -t int db/private/rpm-installer/requestinfo/options "0" -f -s syst
 %attr(0744,-,-) /usr/etc/rpm-installer-config.ini
 %attr(0744,-,-) /usr/etc/coretpk-installer-config.ini
 %attr(0644,-,-) /usr/lib/libnativerpm.so
-%attr(0755,-,-) /opt/share/packages/.pkgmgr/rpm-installer/rpm_installer_deactvation_list.txt
 /usr/share/license/%{name}

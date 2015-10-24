@@ -28,19 +28,16 @@
 #include <pkgmgr_installer.h>
 #include <security-server.h>
 #include "rpm-frontend.h"
-#include "rpm-installer-util.h"
+#include "installer-type.h"
+#include "installer-util.h"
 #include "rpm-installer.h"
 #include "coretpk-installer.h"
 
-#define _FIX_POP_UP_
 extern struct appdata ad;
-extern int ret_val;
 extern pkgmgr_installer *pi;
 ri_frontend_data front_data;
 char scrolllabel[256];
 int move_type;
-#define BUF_SIZE 1024
-#define OTP_USR_APPS "/opt/usr/apps"
 
 static void __ri_show_usage(char **arg);
 static int __ri_process_request(ri_frontend_cmdline_arg *fdata);
@@ -75,28 +72,76 @@ static void __ri_show_usage(char **arg)
 	       "\t -s : (smack) apply smack rule and set smack label\n");
 }
 
-int _ri_parse_hybrid(int argc, char **argv)
+int _ri_parse_command_arg(int argc, char **argv)
 {
-	int i = 0;
+	int ret = 0;
 
 	if (argv[1] != NULL) {
-		if (!strcmp(argv[1], "-iv")) {
-			_LOGE("Hybrid Installation start\n");
+		if (!strcmp(argv[1], "-iv")) { // hybrid
+			_LOGD("Hybrid Installation start");
 
-			for (i = 0; i < argc; i++) {
-				const char* arg_str = argv[i];
-				if (arg_str)
-					_LOGE("argv[%d] = [%s]\n", i, arg_str);
-			}
-
-			if (_coretpk_installer_request_hybrid(argv[1][1], argv[2], atoi(argv[4])) == 0) {
-				return RPM_INSTALLER_SUCCESS;
-			} else {
-				return RPM_INSTALLER_ERR_INTERNAL;
-			}
+			ret = _coretpk_installer_request_hybrid(argv[1][1], argv[2], atoi(argv[4]));
+			fprintf(stdout, "%d", ret);
+			return ret;
 		} else if (!strcmp(argv[1], "-uv")) {
-			_LOGE("Hybrid Uninstallation start\n");
-			return RPM_INSTALLER_SUCCESS;
+			_LOGD("Hybrid Uninstallation start");
+
+			fprintf(stdout, "%d", ret);
+			return ret;
+		} else if (!strcmp(argv[1], "-ip")) { // preload
+			_LOGD("Preload Installation start.");
+
+			ret = _coretpk_installer_prepare_preload_install(argv[2], NULL, NULL);
+			return ret;
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+		} else if (!strcmp(argv[1], "-ipw")) { // preload
+			_LOGD("Mount Based Preload Installation start.");
+			ret = _coretpk_installer_prepare_mount_install(argv[2], NULL, false, NULL);
+			return ret;
+#endif
+		} else if (!strcmp(argv[1], "-ipd")) { // preload, support-disable
+			_LOGD("Preload Installation start.(support-disable)");
+
+			cmdinfo cmd_info = {0, };
+			cmd_info.support_disable = true;
+
+			ret = _coretpk_installer_prepare_preload_install(argv[2], NULL, &cmd_info);
+			return ret;
+		} else if (!strcmp(argv[1], "-up")) { // preload uninstall
+			_LOGD("Preload Uninstallation start.");
+
+			ret = _coretpk_installer_prepare_preload_uninstall(argv[2]);
+			return ret;
+		} else if (!strcmp(argv[1], "-i")) { // download install
+			_LOGD("Download Installation start.");
+
+			ret = _coretpk_installer_prepare_package_install(argv[2], NULL, false, NULL);
+			return ret;
+		} else if (!strcmp(argv[1], "-u")) { // download uninstall
+			_LOGD("Download Uninstallation start.");
+
+			ret = _coretpk_installer_prepare_package_uninstall(argv[2]);
+			return ret;
+		} else if (!strcmp(argv[1], "-c")) { // csc
+			_LOGD("CSC start.");
+
+			ret = _coretpk_installer_prepare_csc(argv[2]);
+			return ret;
+		} else if (!strcmp(argv[1], "-f")) { // fota
+			_LOGD("FOTA start.");
+
+			ret = _coretpk_installer_prepare_fota(argv[2], false);
+			return ret;
+		} else if (!strcmp(argv[1], "-F")) { // fota
+			_LOGD("RW FOTA start.");
+
+			ret = _coretpk_installer_prepare_fota(argv[2], true);
+			return ret;
+		} else if (!strcmp(argv[1], "-ix")) { // init_db
+			_LOGD("Init db start.");
+
+			ret = _ri_init_db(argv[2]);
+			return ret;
 		}
 	}
 
@@ -108,24 +153,43 @@ int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data)
 	int req_cmd = INVALID_CMD;
 	const char *pkgid = NULL;
 	const char *pkeyid = NULL;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	const char *tep_path = NULL;
+	int tep_move = 0;
+#endif
 	int ret = 0;
 	int move_type = -1;
+
 	pi = pkgmgr_installer_new();
 	if (!pi) {
-		_LOGE(
-		       "Failure in creating the pkgmgr_installer object \n");
+		_LOGE("Failure in creating the pkgmgr_installer object.");
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	}
+
 	ret = pkgmgr_installer_receive_request(pi, argc, argv);
 	if (ret) {
-		_LOGE("pkgmgr_installer_receive_request failed \n");
+		_LOGE("pkgmgr_installer_receive_request failed.");
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	}
+
 	ret = pkgmgr_installer_get_request_type(pi);
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	_LOGE("request_type[%d] \n", ret);
+#endif
 	switch (ret) {
 	case PKGMGR_REQ_INSTALL:
 		req_cmd = INSTALL_CMD;
 		break;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	case PKGMGR_REQ_INSTALL_TEP:
+		req_cmd = INSTALL_TEP_CMD;
+		break;
+#endif
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+	case PKGMGR_REQ_MOUNT_INSTALL:
+		req_cmd = CORETPK_MOUNT_INSTALL_CMD;
+		break;
+#endif
 	case PKGMGR_REQ_REINSTALL:
 		req_cmd = CORETPK_REINSTALL_CMD;
 		break;
@@ -152,47 +216,64 @@ int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data)
 	default:
 		goto PARSEERROR;
 	}
+
 	if (req_cmd != RECOVER_CMD) {
 		pkgid = pkgmgr_installer_get_request_info(pi);
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+		tep_path = pkgmgr_installer_get_tep_path(pi);
+		tep_move = pkgmgr_installer_get_tep_move_type(pi);
+#else
 		if (!pkgid) {
-			_LOGE(
-			       "pkgmgr_installer_get_request_info failed \n");
+			_LOGE("pkgmgr_installer_get_request_info failed.");
 			return RPM_INSTALLER_ERR_WRONG_PARAM;
 		}
+#endif
+
 		pkeyid = pkgmgr_installer_get_session_id(pi);
 		if (!pkeyid) {
-			_LOGE("pkgmgr_installer_get_session_id failed \n");
+			_LOGE("pkgmgr_installer_get_session_id failed.");
 			return RPM_INSTALLER_ERR_WRONG_PARAM;
 		}
+
 		move_type = pkgmgr_installer_get_move_type(pi);
 	}
-//Logically dead code,the value of req_cmd never satisfies the condition
-#if 0
-	if ((req_cmd < INSTALL_CMD) ||(req_cmd > RPM_CMD_MAX)) {
-		_LOGE("invalid command \n");
-		goto PARSEERROR;
-	}
+
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	_LOGD("req_cmd[%d]\n", req_cmd);
+	_LOGD("pkg_id[%s]\n", pkgid);
+	if (tep_path)
+		_LOGD("tep_path[%s]\n", tep_path);
+	_LOGD("key_id[%s]\n", pkeyid);
+	_LOGD("tep_move[%d]\n", tep_move);
 #endif
 	data->req_cmd = req_cmd;
 	data->pkgid = (char *)pkgid;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	data->tep_path = (char *)tep_path;
+	data->tep_move = tep_move;
+#endif
 	data->keyid = (char *)pkeyid;
 	data->move_type = move_type;
 	data->clientid = (char *)pkgmgr_installer_get_caller_pkgid(pi);
+	data->optional_data = (char*)pkgmgr_installer_get_optional_data(pi);
+	data->pkg_chksum = (char *)pkgmgr_installer_get_pkg_chksum(pi);
+#ifdef _APPFW_FEATURE_SUPPORT_DEBUGMODE_FOR_SDK
+	data->debug_mode = (bool)pkgmgr_installer_is_debug_mode(pi);
+#endif
 
 	return RPM_INSTALLER_SUCCESS;
 
  PARSEERROR:
-	_LOGE("Error in parsing input parameter\n");
+	_LOGE("Error in parsing input parameter.");
 	__ri_show_usage(argv);
 	return RPM_INSTALLER_ERR_WRONG_PARAM;
-
 }
 
 static int __ri_is_core_tpk_app(char *pkgid)
 {
 	char pkgpath[BUF_SIZE] = {'\0'};
 
-	snprintf(pkgpath, BUF_SIZE, "%s/%s/tizen-manifest.xml", OTP_USR_APPS, pkgid);
+	snprintf(pkgpath, BUF_SIZE, "%s/%s/tizen-manifest.xml", OPT_USR_APPS, pkgid);
 
 	if (access(pkgpath, R_OK) == 0) {
 		_LOGE("This is a core tpk app.");
@@ -210,7 +291,12 @@ static int __ri_process_request(ri_frontend_cmdline_arg *data)
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	char *pkgid = NULL;
 	char *keyid = NULL;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	_LOGE("request_type [%d]", data->req_cmd);
+	if (data->req_cmd != RECOVER_CMD && data->req_cmd != INSTALL_TEP_CMD) {
+#else
 	if (data->req_cmd != RECOVER_CMD) {
+#endif
 		pkgid = strdup(data->pkgid);
 		if (PM_UNLIKELY(pkgid == NULL)) {
 			_LOGE("strdup failed\n");
@@ -223,11 +309,6 @@ static int __ri_process_request(ri_frontend_cmdline_arg *data)
 			pkgid = NULL;
 			return RPM_INSTALLER_ERR_WRONG_PARAM;
 		}
-	}
-
-	if (pkgid == NULL) {
-		_LOGE("pkgid is null\n");
-		return -1;
 	}
 
 	switch (data->req_cmd) {
@@ -277,6 +358,11 @@ static int __ri_process_request(ri_frontend_cmdline_arg *data)
 		_LOGD("installation: tpk, arg=[%s]", pkgid);
 		_LOGD("------------------------------------------------");
 		ret = _coretpk_backend_interface("coretpk-install", data);
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+		if (ret == 0 && data->tep_path != NULL) {
+			ret = _coretpk_backend_interface("coretpk-tep-install", data);
+		}
+#endif
 		break;
 	case CORETPK_REINSTALL_CMD:
 		_LOGD("coretpk-reinstall %s\n", pkgid);
@@ -286,14 +372,27 @@ static int __ri_process_request(ri_frontend_cmdline_arg *data)
 		_LOGD("coretpk-directory_install %s\n", pkgid);
 		ret = _coretpk_backend_interface("coretpk-directory-install", data);
 		break;
-	case ENABLE_CMD:
-		_LOGD("rpm enable %s\n", pkgid);
-		ret = _rpm_backend_interface(keyid, pkgid, "rpm-enable", NULL);
+	case CORETPK_WATCH_INSTALL_CMD:
+		_LOGD("coretpk-watch-install %s", pkgid);
+		ret = _coretpk_backend_interface("coretpk-watch-install", data);
 		break;
-	case DISABLE_CMD:
-		_LOGD("rpm disable %s\n", pkgid);
-		ret = _rpm_backend_interface(keyid, pkgid, "rpm-disable", NULL);
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	case INSTALL_TEP_CMD:
+		ret = _coretpk_backend_interface("coretpk-tep-install", data);
 		break;
+#endif
+#ifdef _APPFW_FEATURE_DELTA_UPDATE
+	case CORETPK_DELTA_INSTALL_CMD:
+		_LOGD("coretpk-delta_install %s\n", pkgid);
+		ret = _coretpk_backend_interface("coretpk-delta-install", data);
+		break;
+#endif
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+	case CORETPK_MOUNT_INSTALL_CMD:
+		_LOGD("coretpk-mount_install %s\n", pkgid);
+		ret = _coretpk_backend_interface(CORETPK_MOUNT_INSTALL, data);
+		break;
+#endif
 	default:
 		_LOGE("Error Never Come Here as Error is already checked\n");
 	}
@@ -313,18 +412,18 @@ static int __ri_process_request(ri_frontend_cmdline_arg *data)
 void _ri_stat_cb(const char *pkgid, const char *key, const char *val)
 {
 
-	if (NULL == pkgid || NULL == key || NULL == val) {
-		_LOGE("Either pkgid/key/val is NULL\n");
+	if (NULL == pkgid || NULL == key || NULL == val || NULL == front_data.args) {
+		_LOGE("Either pkgid/key/val/front_data.args is NULL\n");
 		return;		/*TODO: handle error. */
 	}
 
-	char pkgid_modified[PATH_MAX] = {0};
+	char pkgid_modified[BUF_SIZE] = {0};
 	char delims[] = "/";
 	char *result = NULL;
 	char *pkgid_tmp = NULL;
 	char *saveptr = NULL;
 
-	memcpy(pkgid_modified, pkgid, strlen(pkgid));
+	strncpy(pkgid_modified, pkgid, BUF_SIZE-1);
 
 	result = strtok_r(pkgid_modified, delims, &saveptr);
 	while (result != NULL) {
@@ -368,15 +467,11 @@ void _ri_stat_cb(const char *pkgid, const char *key, const char *val)
 				 "error",
 				 front_data.error);
 			_LOGE("%s\n", scrolllabel);
-			ret_val = _ri_string_to_error_no(front_data.error);
-			_LOGE("%d\n", ret_val);
-
 		} else {
 			snprintf(scrolllabel, sizeof(scrolllabel),
 				 " %s :: %s :: %s", requesttype, pkgid_tmp,
 				"success");
 			_LOGD("%s\n", scrolllabel);
-			ret_val = 0;
 		}
 	}
 }

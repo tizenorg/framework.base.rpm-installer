@@ -27,35 +27,50 @@ extern "C" {
 #endif				/* __cplusplus */
 
 /*use pkginfo*/
-#include "rpm-installer-util.h"
 #include "coretpk-installer.h"
-#include "coretpk-installer-type.h"
+#include "installer-type.h"
 
-int _coretpk_installer_directory_install(char* dirpath, char *clientid);
 
-int _coretpk_installer_package_install(char *pkgfile, char *pkgid, char *clientid);
-int _coretpk_installer_package_uninstall(const char *pkgid);
-int _coretpk_installer_package_reinstall(char *dirpath, char *clientid);
-int _coretpk_installer_package_upgrade(char *pkgfile, char *pkgid, char *clientid);
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+#define TZIP_BUS_NAME "org.tizen.system.deviced"
+#define TZIP_OBJECT_PATH "/Org/Tizen/System/DeviceD/Tzip"
+#define TZIP_INTERFACE_NAME "org.tizen.system.deviced.Tzip"
+#define TZIP_MOUNT_METHOD "Mount"
+#define TZIP_UNMOUNT_METHOD "Unmount"
+#define TZIP_IS_MOUNTED_METHOD "IsMounted"
 
-int _coretpk_installer_csc_install(char *path_str, char *remove_str);
+#define TZIP_MOUNT_MAXIMUM_RETRY_CNT 15
+#endif
 
-pkginfo *_coretpk_installer_get_pkgfile_info(char *pkgfile);
-char* _coretpk_installer_load_directory(char *directory,char* pkgfile);
-int _coretpk_installer_get_configuration_value(char *value);
+int _coretpk_installer_package_reinstall(const char *dirpath, const char *clientid);
 
-int _coretpk_installer_change_mode(char* path, int mode);
-int _coretpk_installer_change_file_owner(char* path, int ownerid, int groupid);
-int _coretpk_installer_change_directory_owner(char* dirpath, int ownerid, int groupid);
-int _coretpk_installer_make_directory_for_ext(char *pkgid);
-int _coretpk_installer_make_directory(char *pkgid);
-int _coretpk_installer_apply_smack(char *pkgname, int flag);
-int _coretpk_installer_apply_privilege(char *pkgid, char *pkgPath, int apiVisibility);
+pkginfo *_coretpk_installer_get_pkgfile_info(const char *pkgfile, int cmd);
+
+int _coretpk_installer_change_mode(const char* path, int mode);
+int _coretpk_installer_change_file_owner(const char* path, int ownerid, int groupid);
+int _coretpk_installer_change_directory_owner(const char* dirpath, int ownerid, int groupid);
+int _coretpk_installer_make_directory_for_ext(const char *pkgid);
+int _coretpk_installer_make_directory(const char *pkgid, bool preload);
+int _coretpk_installer_apply_smack(const char *pkgname, int flag);
+int _coretpk_installer_apply_privilege(const char *pkgid, const char *pkgPath, int apiVisibility);
 void _coretpk_installer_search_ui_gadget(const char *pkgid);
 int _coretpk_installer_set_smack_label_access(const char *path, const char *label);
 int _coretpk_installer_get_smack_label_access(const char *path, char **label);
 int _coretpk_installer_set_smack_label_transmute(const char *path, const char *flag);
 int _coretpk_installer_remove_db_info(const char *pkgid);
+
+int __coretpk_patch_trimmed_api_version(const char *api_version, char **trim_api_version);
+int __coretpk_patch_padded_api_version(const char *api_version, char **pad_api_version);
+
+int __coretpk_installer_csc_install(const char *path_str, const char *remove_str, const char *csc_script);
+int __coretpk_installer_csc_uninstall(const char *pkgid);
+
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+int _coretpk_dbus_mount_file(char *mnt_path[], const char *pkgid);
+int _coretpk_dbus_unmount_file(char *mnt_path);
+int _coretpk_dbus_is_mount_done(const char *mnt_path);
+int _coretpk_dbus_wait_for_tep_mount(const char *tep_path);
+#endif
 
 #ifdef __cplusplus
 }

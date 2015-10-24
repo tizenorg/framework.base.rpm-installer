@@ -42,24 +42,22 @@
 #include <pkgmgr-info.h>
 #include <pkgmgr_parser.h>
 #include "rpm-installer.h"
-#include "rpm-installer-type.h"
-#include "rpm-installer-util.h"
+#include "installer-util.h"
+#include "installer-type.h"
 #include "db-util.h"
 #include "rpm-frontend.h"
-
 
 extern char *gpkgname;
 extern int do_upgrade;
 
-char* _rpm_load_directory(char *directory,char* pkgfile)
+char *_rpm_load_directory(char *directory, char *pkgfile)
 {
 	DIR *dir;
 	struct dirent entry, *result;
 	int ret;
 	char *buf = NULL;
 	char *pkgname = NULL;
-//	char *rpm_pkgname = NULL;
-	char xml_file[PATH_MAX] = {0};
+	char xml_file[BUF_SIZE] = { 0 };
 
 	buf = malloc(BUF_SIZE);
 	if (buf == NULL) {
@@ -70,7 +68,7 @@ char* _rpm_load_directory(char *directory,char* pkgfile)
 	dir = opendir(directory);
 	if (!dir) {
 		if (strerror_r(errno, buf, BUF_SIZE) == 0)
-		_LOGE("Can not access to the [%s] because %s.\n", directory, buf);
+			_LOGE("Can not access to the [%s] because %s.\n", directory, buf);
 		free(buf);
 		return NULL;
 	}
@@ -78,12 +76,11 @@ char* _rpm_load_directory(char *directory,char* pkgfile)
 	_LOGD("Loading manifest files from %s\n", directory);
 
 	for (ret = readdir_r(dir, &entry, &result);
-			ret == 0 && result != NULL;
-			ret = readdir_r(dir, &entry, &result)) {
+		ret == 0 && result != NULL;
+		ret = readdir_r(dir, &entry, &result)) {
 		char *manifest = NULL;
 
-		if (!strcmp(entry.d_name, ".") ||
-			!strcmp(entry.d_name, "..")) {
+		if (!strcmp(entry.d_name, ".") || !strcmp(entry.d_name, "..")) {
 			continue;
 		}
 
@@ -93,78 +90,27 @@ char* _rpm_load_directory(char *directory,char* pkgfile)
 			continue;
 		}
 
-		memset(xml_file, '\0', PATH_MAX);
-		snprintf(xml_file,PATH_MAX-1,"%s/%s",directory,manifest);
-		_LOGD("manifest is [%s] and its full path is [%s]",manifest,xml_file);
-		ret = _get_package_name_from_xml(xml_file,&pkgname);
-		if(ret != PMINFO_R_OK || pkgname == NULL){
-			_LOGE("Unable To read [%s] manifest file",xml_file);
-			free(manifest);
+		memset(xml_file, '\0', BUF_SIZE);
+		snprintf(xml_file, BUF_SIZE - 1, "%s/%s", directory, manifest);
+		_LOGD("manifest is [%s] and its full path is [%s]", manifest, xml_file);
+		ret = _get_package_name_from_xml(xml_file, &pkgname);
+		if (ret != PMINFO_R_OK || pkgname == NULL) {
+			_LOGE("Unable To read [%s] manifest file", xml_file);
+			FREE_AND_NULL(manifest);
 			continue;
 		}
 
-		else
-		{
+		else {
 			snprintf(buf, BUF_SIZE, "%s/%s", directory, manifest);
-			_LOGD("Manifest file is %s\n",manifest);
-			free(manifest);
+			_LOGD("Manifest file is %s\n", manifest);
+			FREE_AND_NULL(manifest);
 			break;
 		}
-
-#if 0	//dont check pkgname from rpm-name, there is a bug
-		ret = _get_pkgname_from_rpm_name(pkgfile, &rpm_pkgname);
-		if(ret != RPM_INSTALLER_SUCCESS || rpm_pkgname == NULL){
-			_LOGE("Couldn't get the pkgname from rpm file [%s]",pkgfile);
-			if(pkgname){
-				free(pkgname);
-				pkgname = NULL;
-			}
-			if(buf){
-				free(buf);
-				buf = NULL;
-			}
-			closedir(dir);
-			free(manifest);
-			return NULL;
-		}
-		_LOGD("Pkgname from xml is [%s] and pkgname from rpm's name is [%s]",pkgname,rpm_pkgname);
-
-		/*
-		Compare the package name which is extracted from manifest file with package name which is extracted from rpm file's name.
-		If match is successful then it is required manifest file.
-		*/
-
-		if(!strcmp(pkgname,rpm_pkgname)){
-			snprintf(buf, BUF_SIZE, "%s/%s", directory, manifest);
-			_LOGD("Manifest file is %s\n",buf);
-			free(manifest);
-			break;
-		}else{
-			free(manifest);
-			if(pkgname){
-				free(pkgname);
-				pkgname = NULL;
-			}
-			if(rpm_pkgname){
-				free(rpm_pkgname);
-				rpm_pkgname = NULL;
-			}
-		}
-#endif
 	}
 
 	closedir(dir);
 
-	if(pkgname){
-		free(pkgname);
-		pkgname = NULL;
-	}
-#if 0
-	if(rpm_pkgname){
-		free(rpm_pkgname);
-		rpm_pkgname = NULL;
-	}
-#endif
+	FREE_AND_NULL(pkgname);
 
 	return buf;
 }
@@ -175,10 +121,11 @@ pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 	manifest_x *mfx = NULL;
 	int ret = 0;
 	int m_exist = 0;
-	char cwd[BUF_SIZE] = {'\0'};
-	char buff[BUF_SIZE] = {'\0'};
-	char manifest[BUF_SIZE] = { '\0'};
+	char cwd[BUF_SIZE] = { '\0' };
+	char buff[BUF_SIZE] = { '\0' };
+	char manifest[BUF_SIZE] = { '\0' };
 	char *temp = NULL;
+	char buf[BUF_SIZE] = { 0, };
 
 	temp = getcwd(cwd, BUF_SIZE);
 	if ((temp == NULL) || (cwd[0] == '\0')) {
@@ -189,7 +136,7 @@ pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 	ret = mkdir(TEMP_DIR, 0644);
 	if (ret < 0) {
 		if (access(TEMP_DIR, F_OK) == 0) {
-			_rpm_delete_dir(TEMP_DIR);
+			_installer_util_delete_dir(TEMP_DIR);
 			ret = mkdir(TEMP_DIR, 0644);
 			if (ret < 0) {
 				_LOGE("mkdir() failed.\n");
@@ -203,7 +150,8 @@ pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 
 	ret = chdir(TEMP_DIR);
 	if (ret != 0) {
-		_LOGE("chdir(%s) failed [%s].\n", TEMP_DIR, strerror(errno));
+		if (strerror_r(errno, buf, BUF_SIZE) == 0)
+			_LOGE("chdir(%s) failed [%s].\n", TEMP_DIR, buf);
 		goto err;
 	}
 
@@ -211,17 +159,20 @@ pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 
 	const char *cpio_argv[] = { CPIO_SCRIPT, pkgfile, NULL };
 	ret = _ri_xsystem(cpio_argv);
+	if (ret != 0) {
+		_LOGE("cpio failed for [%s], returns[%d].", pkgfile, ret);
+	}
 
-	snprintf(manifest, BUF_SIZE, "%s/opt/share/packages", TEMP_DIR);
-	char* manifestpath = _rpm_load_directory(manifest,pkgfile);
+	snprintf(manifest, BUF_SIZE, "%s%s", TEMP_DIR, OPT_SHARE_PACKAGES);
+	char *manifestpath = _rpm_load_directory(manifest, pkgfile);
 	if (manifestpath != NULL) {
 		strncpy(buff, manifestpath, sizeof(buff) - 1);
 		free(manifestpath);
 	}
 
 	if (buff[0] == '\0') {
-		snprintf(manifest, BUF_SIZE, "%s/usr/share/packages", TEMP_DIR);
-		manifestpath = _rpm_load_directory(manifest,pkgfile);
+		snprintf(manifest, BUF_SIZE, "%s%s", TEMP_DIR, USR_SHARE_PACKAGES);
+		manifestpath = _rpm_load_directory(manifest, pkgfile);
 		if (manifestpath != NULL) {
 			strncpy(buff, manifestpath, sizeof(buff) - 1);
 			free(manifestpath);
@@ -236,13 +187,13 @@ pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 		m_exist = 1;
 	}
 
-	_LOGD("Manifest file is [%s]",buff);
+	_LOGD("Manifest file is [%s]", buff);
 
 	if (m_exist) {
 
 		_LOGD("The path of manifest.xml is %s.\n", buff);
 
-		/*get package name from xml*/
+		/*get package name from xml */
 		mfx = pkgmgr_parser_process_manifest_xml(buff);
 		if (mfx != NULL) {
 
@@ -259,11 +210,12 @@ pkginfo *_rpm_installer_get_pkgfile_info(char *pkgfile)
 	}
 
 err:
-	_rpm_delete_dir(TEMP_DIR);
+	_installer_util_delete_dir(TEMP_DIR);
 
 	ret = chdir(cwd);
 	if (ret != 0) {
-		_LOGE("chdir(%s) failed [%s].\n", cwd, strerror(errno));
+		if (strerror_r(errno, buf, BUF_SIZE) == 0)
+			_LOGE("chdir(%s) failed [%s].\n", cwd, buf);
 	}
 
 	if (mfx != NULL) {
@@ -320,7 +272,7 @@ pkginfo *_rpm_installer_get_pkgname_info(const char *pkgid)
 	return info;
 
 err:
-	if(info){
+	if (info) {
 		free(info);
 		info = NULL;
 	}
@@ -328,9 +280,9 @@ err:
 	return NULL;
 }
 
-int _rpm_installer_corexml_install(char *pkgfilepath)
+int _rpm_installer_corexml_install(const char *pkgfilepath)
 {
-	/* Get package ID from filepath <pkgid.xml>*/
+	/* Get package ID from filepath <pkgid.xml> */
 	char *p = NULL;
 	char *q = NULL;
 	char *temp = NULL;
@@ -346,7 +298,7 @@ int _rpm_installer_corexml_install(char *pkgfilepath)
 		free(temp);
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
-	/*p now points to pkgid.xml*/
+	/*p now points to pkgid.xml */
 	q = strrchr(p, '.');
 	if (q == NULL) {
 		_LOGE("Failed to extract pkgid from xml name\n");
@@ -361,8 +313,7 @@ int _rpm_installer_corexml_install(char *pkgfilepath)
 	return ret;
 }
 
-int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
-				   char *installoptions, char *clientid)
+int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall, char *installoptions, char *clientid)
 {
 	int err = 0;
 	char *p = NULL;
@@ -372,7 +323,7 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 	/* Check for core xml installation */
 	p = strrchr(pkgfilepath, '.');
 	if (p) {
-		if (strncmp(p+1, "xml", 3) == 0) {
+		if (strncmp(p + 1, "xml", 3) == 0) {
 			err = _rpm_installer_corexml_install(pkgfilepath);
 			if (err) {
 				_LOGE("_rpm_installer_corexml_install() failed\n");
@@ -385,6 +336,7 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 		_LOGE("pkgfilepath does not have an extension\n");
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
+
 	/* rpm installation */
 	pkginfo *info = NULL;
 	pkginfo *tmpinfo = NULL;
@@ -400,15 +352,15 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 	}
 
 	_ri_set_backend_state_info(GOT_PACKAGE_INFO_SUCCESSFULLY);
-	_ri_save_last_input_info(pkgfilepath,INSTALL_CMD,0);
+	_ri_save_last_input_info(pkgfilepath, INSTALL_CMD, 0);
 	if (gpkgname) {
 		free(gpkgname);
 		gpkgname = NULL;
 	}
 	gpkgname = strdup(info->package_name);
-	if(gpkgname == NULL){
+	if (gpkgname == NULL) {
 		_LOGE("Malloc failed!!");
-		if(info){
+		if (info) {
 			free(info);
 			info = NULL;
 		}
@@ -427,8 +379,7 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 
 		err = _rpm_install_pkg_with_dbpath(pkgfilepath, gpkgname, clientid);
 		if (err != 0) {
-			_LOGE(
-			       "install complete with error(%d)\n", err);
+			_LOGE("install complete with error(%d)\n", err);
 			return err;
 		} else {
 			_ri_set_backend_state_info(REQUEST_COMPLETED);
@@ -436,13 +387,11 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 		}
 	} else if (strcmp(info->version, tmpinfo->version) > 0) {
 		/*upgrade */
-
 		_LOGD("[upgrade] %s, %s\n", info->version, tmpinfo->version);
 
 		err = _rpm_upgrade_pkg_with_dbpath(pkgfilepath, gpkgname);
 		if (err != 0) {
-			_LOGE(
-			       "upgrade complete with error(%d)\n", err);
+			_LOGE("upgrade complete with error(%d)\n", err);
 			if (info) {
 				free(info);
 				info = NULL;
@@ -465,24 +414,21 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 			return RPM_INSTALLER_SUCCESS;
 		}
 	} else if (strcmp(info->version, tmpinfo->version) < 0) {
-
 		_LOGD("[down grade] %s, %s\n", info->version, tmpinfo->version);
 
-			err = _rpm_upgrade_pkg_with_dbpath(pkgfilepath, gpkgname);
-			if (err != 0) {
-				_LOGE(
-				       "upgrade complete with error(%d)\n",
-				       err);
-				if (info) {
-					free(info);
-					info = NULL;
-				}
-				if (tmpinfo) {
-					free(tmpinfo);
-					tmpinfo = NULL;
-				}
-				return err;
-			}else{
+		err = _rpm_upgrade_pkg_with_dbpath(pkgfilepath, gpkgname);
+		if (err != 0) {
+			_LOGE("upgrade complete with error(%d)\n", err);
+			if (info) {
+				free(info);
+				info = NULL;
+			}
+			if (tmpinfo) {
+				free(tmpinfo);
+				tmpinfo = NULL;
+			}
+			return err;
+		} else {
 			_ri_set_backend_state_info(REQUEST_COMPLETED);
 			if (info) {
 				free(info);
@@ -493,18 +439,14 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 				tmpinfo = NULL;
 			}
 			return RPM_INSTALLER_SUCCESS;
-
 		}
-
 	} else {
 		/*same package. Reinstall it. Manifest should be parsed again */
-
 		_LOGD("[same pkg] %s, %s\n", info->package_name, info->version);
 
 		err = _rpm_upgrade_pkg_with_dbpath(pkgfilepath, gpkgname);
 		if (err != 0) {
-			_LOGE(
-			       "upgrade complete with error(%d)\n", err);
+			_LOGE("upgrade complete with error(%d)\n", err);
 			if (info) {
 				free(info);
 				info = NULL;
@@ -529,7 +471,6 @@ int _rpm_installer_package_install(char *pkgfilepath, bool forceinstall,
 	}
 
 	return RPM_INSTALLER_SUCCESS;
-
 }
 
 int _rpm_installer_package_install_with_dbpath(char *pkgfilepath, char *clientid)
@@ -553,15 +494,15 @@ int _rpm_installer_package_install_with_dbpath(char *pkgfilepath, char *clientid
 	}
 
 	_ri_set_backend_state_info(GOT_PACKAGE_INFO_SUCCESSFULLY);
-	_ri_save_last_input_info(info->package_name,EFLWGT_INSTALL_CMD,0);
+	_ri_save_last_input_info(info->package_name, EFLWGT_INSTALL_CMD, 0);
 	if (gpkgname) {
 		free(gpkgname);
 		gpkgname = NULL;
 	}
 	gpkgname = strdup(info->package_name);
-	if(gpkgname == NULL){
+	if (gpkgname == NULL) {
 		_LOGE("Malloc failed!!");
-		if(info){
+		if (info) {
 			free(info);
 			info = NULL;
 		}
@@ -585,7 +526,7 @@ int _rpm_installer_package_install_with_dbpath(char *pkgfilepath, char *clientid
 
 	} else {
 		/*same package. Reinstall it. Manifest should be parsed again */
-		_LOGD( "#package is same. Go for reinstall(upgrade)\n");
+		_LOGD("#package is same. Go for reinstall(upgrade)\n");
 		ret = _rpm_upgrade_pkg_with_dbpath(pkgfilepath, info->package_name);
 	}
 
@@ -601,7 +542,7 @@ int _rpm_installer_package_install_with_dbpath(char *pkgfilepath, char *clientid
 	if (ret != 0) {
 		_LOGE("[@@]end : _rpm_installer_package_install_with_dbpath(%d)\n", ret);
 	} else {
-		_LOGD( "[##]end : _rpm_installer_package_install_with_dbpath \n");
+		_LOGD("[##]end : _rpm_installer_package_install_with_dbpath \n");
 	}
 
 	return ret;
@@ -616,7 +557,7 @@ int _rpm_installer_package_uninstall(char *pkgid)
 {
 	int ret = 0;
 
-	_LOGD( "start : _rpm_installer_package_uninstall\n");
+	_LOGD("start : _rpm_installer_package_uninstall\n");
 
 	pkginfo *tmppkginfo = _rpm_installer_get_pkgname_info(pkgid);
 	if (tmppkginfo == NULL) {
@@ -634,10 +575,10 @@ int _rpm_installer_package_uninstall(char *pkgid)
 	}
 
 	gpkgname = strdup(pkgid);
-//	_ri_broadcast_status_notification(pkgid, "command", "Uninstall");
+	/* _ri_broadcast_status_notification(pkgid, "command", "Uninstall"); */
 #endif
 	_ri_set_backend_state_info(GOT_PACKAGE_INFO_SUCCESSFULLY);
-	_ri_save_last_input_info(pkgid,DELETE_CMD,0);
+	_ri_save_last_input_info(pkgid, DELETE_CMD, 0);
 	ret = _rpm_uninstall_pkg(pkgid);
 
 	_ri_set_backend_state_info(REQUEST_COMPLETED);
@@ -653,7 +594,7 @@ int _rpm_installer_clear_private_data(char *pkgid)
 		return RPM_INSTALLER_ERR_WRONG_PARAM;
 	char dir_path[BUF_SIZE] = { '\0' };
 	int ret = -1;
-	snprintf(dir_path, 255, "/opt/usr/apps/%s/data/", pkgid);
+	snprintf(dir_path, BUF_SIZE-1, "%s/%s/data/", OPT_USR_APPS, pkgid);
 	ret = _ri_recursive_delete_dir(dir_path);
 	return ret;
 }

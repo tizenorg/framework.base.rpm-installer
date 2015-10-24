@@ -30,13 +30,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <privilege-control.h>
+#include <security-server.h>
 #include "sys/smack.h"
 
 #include "rpm-installer.h"
 
 
 
-static int __ri_privilege_perm_begin(void)
+int __ri_privilege_perm_begin(void)
 {
 	int ret = 0;
 
@@ -46,7 +47,7 @@ static int __ri_privilege_perm_begin(void)
 	return ret;
 }
 
-static int __ri_privilege_perm_end(void)
+int __ri_privilege_perm_end(void)
 {
 	int ret = 0;
 
@@ -101,12 +102,8 @@ int _ri_privilege_enable_permissions(const char *pkgid, int apptype,
 {
 	int ret = 0;
 
-	__ri_privilege_perm_begin();
-
 	ret = perm_app_enable_permissions(pkgid, apptype, perms, persistent);
 	_LOGD("[smack] app_enable_permissions(%s, %d), result=[%d]", pkgid, apptype, ret);
-
-	__ri_privilege_perm_end();
 
 	return ret;
 }
@@ -143,8 +140,12 @@ int _ri_privilege_change_smack_label(const char *path, const char *label,
 		return -1;
 	int ret = 0;
 
-	ret = smack_lsetlabel(path, label, label_type);
-	_LOGD("[smack] smack_lsetlabel(%s, %s, %d), result=[%d]", path, label, label_type, ret);
+#ifdef _APPFW_FEATURE_SUPPORT_ONLYCAP
+	ret = security_server_label_access(path, label);
+#else
+	ret = smack_lsetlabel(path, label, SMACK_LABEL_ACCESS);
+#endif
+	_LOGD("[smack] security_server_label_access(%s, %s), result=[%d]", path, label, ret);
 
 	return ret;
 }

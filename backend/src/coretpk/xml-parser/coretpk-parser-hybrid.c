@@ -24,12 +24,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <pkgmgr-info.h>
 #include <pkgmgr_parser.h>
 #include <privilege-control.h>
+#include <cert-service.h>
 
 #include "coretpk-installer-internal.h"
-#include "rpm-installer-util.h"
+#include "installer-type.h"
+#include "installer-util.h"
 #include "rpm-installer.h"
 
 #define LOG_PRINT_LINE_MAX 20
@@ -46,7 +49,8 @@ static int __coretpk_parser_hybrid_get_part(const char* start_point, const char*
 static int __coretpk_parser_hybrid_merge_to(const char* merged_buf, int* filesize, const char* tag, const char* buf, int length);
 static int __coretpk_parser_hybrid_dump_log_data(char *data, int length);
 
-static int _coretpk_installer_hybrid_convert_manifest(char *manifest, const char* pkgid, int apiVisibility);
+static int __coretpk_parser_hybrid_convert_api_visibility(int privilegeLevel, int *apiVisibility);
+static int _coretpk_installer_hybrid_convert_manifest(const char *manifest, const char *pkgid, int apiVisibility);
 
 int __coretpk_parser_hybrid_to_file(const char *web_xml, const char *core_xml)
 {
@@ -267,23 +271,14 @@ int __coretpk_parser_hybrid_merge_ui_application(char* merged_buf, char* core_bu
     retvm_if(core_buf == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "core_buf is NULL");
     retvm_if(filesize <= 0, RPM_INSTALLER_ERR_WRONG_PARAM, "filesize is NULL");
 
-	 char *tmp_buf = core_buf;
-	 char *start_ptr = NULL;
-	 char *end_ptr = NULL;
+    if (strcasestr(core_buf, "</ui-application>") == NULL)
+    {
+        _LOGD("<ui-application> is NOT detected in core xml");
+        return RPM_INSTALLER_SUCCESS;
+    }
 
-	 while(1) {
-	 	start_ptr = strcasestr(tmp_buf, "<ui-application");
-		end_ptr = strcasestr(tmp_buf, "</ui-application>");
-		if (end_ptr == NULL) {
-			_LOGD("<ui-application> is not detected anymore in core xml");
-			return RPM_INSTALLER_SUCCESS;
-		}
-
-		_LOGD("<ui-application is detected in core xml");
-		__coretpk_parser_hybrid_merge_tag(merged_buf, tmp_buf, filesize, "<ui-application", "</ui-application>");
-
-		tmp_buf = start_ptr + (end_ptr - start_ptr + strlen("</ui-application>"));
-	 }
+    _LOGD("<ui-application> is detected in core xml");
+    __coretpk_parser_hybrid_merge_tag(merged_buf, core_buf, filesize, "<ui-application", "</ui-application>");
 
     return RPM_INSTALLER_SUCCESS;
 }
@@ -312,25 +307,17 @@ int __coretpk_parser_hybrid_merge_widget_tag(char* merged_buf, char* core_buf, i
     retvm_if(core_buf == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "core_buf is NULL");
     retvm_if(filesize <= 0, RPM_INSTALLER_ERR_WRONG_PARAM, "filesize is NULL");
 
-	 char *tmp_buf = core_buf;
- 	 char *start_ptr = NULL;
-	 char *end_ptr = NULL;
+    if (strcasestr(core_buf, "</widget>") == NULL)
+    {
+        _LOGD("<widget> is NOT detected in core xml");
+        return RPM_INSTALLER_SUCCESS;
+    }
 
-	 while(1) {
-		 start_ptr = strcasestr(tmp_buf, "<widget");
-		 end_ptr = strcasestr(tmp_buf, "</widget>");
-		if (end_ptr == NULL) {
-			_LOGD("<widget> is not detected anymore in core xml");
-			return RPM_INSTALLER_SUCCESS;
-		}
-
-		_LOGD("<widget is detected in core xml");
-		__coretpk_parser_hybrid_merge_tag(merged_buf, tmp_buf, filesize, "<widget", "</widget>");
-
-		tmp_buf = start_ptr + (end_ptr - start_ptr + strlen("</widget>"));
-	 }
+    _LOGD("<widget> is detected in core xml");
+    __coretpk_parser_hybrid_merge_tag(merged_buf, core_buf, filesize, "<widget", "</widget>");
 
     return RPM_INSTALLER_SUCCESS;
+
 }
 
 int __coretpk_parser_hybrid_merge_tag(char* merged_buf, char* core_buf, int* filesize, const char* start_tag, const char* end_tag)
@@ -540,36 +527,32 @@ int __coretpk_parser_hybrid_dump_log_data(char *pData, int dataLen)
 	return 0;
 }
 
-#if 0
-static void __coretpk_parser_hybrid_clean_db(const char *pkgid)
+int __coretpk_parser_hybrid_convert_api_visibility(int privilegeLevel, int *apiVisibility)
 {
-    retm_if(pkgid == NULL, "pkgid is NULL");
-
-	int ret = 0;
-	pkgmgrinfo_pkginfo_h handle = NULL;
-
-	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &handle);
-	if ((ret < 0) || (handle == NULL)) {
-		_LOGD("pkgid[%s] dont have package info", pkgid);
+	if (privilegeLevel == PRIVILEGE_PLATFORM) {
+		*apiVisibility = CERT_SVC_VISIBILITY_PLATFORM;
+	} else if (privilegeLevel == PRIVILEGE_PARTNER) {
+		*apiVisibility = CERT_SVC_VISIBILITY_PARTNER;
 	} else {
-		_LOGD("pkgid[%s] have package info, need clean db for hybrid", pkgid);
-		pkgmgrinfo_pkginfo_destroy_pkginfo(handle);
-
-		//request pkginfo unregister
-		ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
-		if (ret < 0)
-			_LOGE("[%s]fail delete pkg info", pkgid);
+		*apiVisibility = CERT_SVC_VISIBILITY_PUBLIC;
 	}
-}
-#endif
 
-int _coretpk_installer_hybrid_convert_manifest(char *manifest, const char* pkgid, int apiVisibility)
+	return RPM_INSTALLER_SUCCESS;
+}
+
+int _coretpk_installer_hybrid_convert_manifest(const char *manifest, const char *pkgid, int apiVisibility)
 {
+	retvm_if(manifest == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "manifest is NULL.");
+	retvm_if(pkgid == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "pkgid is NULL.");
+
 	int ret = 0;
 
-	ret = mkdir(TEMP_XML_DIR, DIRECTORY_PERMISSION_755);
-	if (ret != 0 && errno != EEXIST) {
-		_LOGE("mkdir()", errno);
+	ret = mkdir(TEMP_DIR, DIRECTORY_PERMISSION_755);
+	if (ret != 0) {
+		char buf[BUF_SIZE] = { 0, };
+		if ( strerror_r(errno, buf, sizeof(buf)) == 0) {
+			_LOGE("mkdir(%s) failed. [%d][%s]", TEMP_DIR, errno, buf);
+		}
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 
@@ -582,7 +565,7 @@ int _coretpk_installer_hybrid_convert_manifest(char *manifest, const char* pkgid
 	return ret;
 }
 
-int _coretpk_installer_request_hybrid(int hybridOperation, char *pPkgPath, int apiVisibility)
+int _coretpk_installer_request_hybrid(int hybridOperation, const char *pPkgPath, int privilegeLevel)
 {
 	retvm_if(pPkgPath == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "pPkgPath is NULL.");
 
@@ -591,8 +574,9 @@ int _coretpk_installer_request_hybrid(int hybridOperation, char *pPkgPath, int a
 	char core_xml[BUF_SIZE] = {'\0'};
 	char converted_core_xml[BUF_SIZE] = {'\0'};
 	char native_id[BUF_SIZE] = {0,};
-	char *tmp_pkgid;
-	manifest_x *mfx = NULL;
+	pkginfo *info = NULL;
+	bool preload = false;
+	int apiVisibility = 0;
 
 	_LOGD("request_hybrid(%s) start.", pPkgPath);
 
@@ -601,36 +585,42 @@ int _coretpk_installer_request_hybrid(int hybridOperation, char *pPkgPath, int a
 
 	_LOGD("core xml = [%s]", core_xml);
 
-	// convert core xml
-	tmp_pkgid = rindex(pPkgPath, '/') + 1;
-	ret = _coretpk_installer_hybrid_convert_manifest(core_xml, tmp_pkgid, apiVisibility);
-	if (ret != 0) {
-		_LOGD("_coretpk_installer_hybrid_convert_manifest(%s, %s) failed.", core_xml, tmp_pkgid);
-		return -1;
-	}
-
-	snprintf(converted_core_xml, BUF_SIZE, "%s/%s", TEMP_XML_DIR, CORETPK_XML);
-	_LOGD("hybrid_convert_manifest(%s) is done.", converted_core_xml);
-
 	// get pkgid and version from xml file
-	mfx = pkgmgr_parser_process_manifest_xml(converted_core_xml);
-	retvm_if(mfx == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "pkgmgr_parser_process_manifest_xml(%s) failed.", converted_core_xml);
+	info = _coretpk_parser_get_manifest_info(core_xml);
+	retvm_if(info == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "_coretpk_parser_get_manifest_info(%s) failed.", core_xml);
 
-	_LOGD("pkgid = [%s], version = [%s]", mfx->package, mfx->version);
-
-#if 0
-	// clean pkgmgr db
-	__coretpk_parser_hybrid_clean_db(mfx->package);
-	_LOGD("hybrid_clean_db(%s) called.", mfx->package);
-#endif
+	_LOGD("pkgid = [%s], version = [%s]", info->package_name, info->version);
 
 	if (strstr(pPkgPath, OPT_USR_APPS)) {
-		snprintf(wgt_xml, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, mfx->package);
+		snprintf(wgt_xml, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, info->package_name);
 	} else {
-		snprintf(wgt_xml, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, mfx->package);
+		snprintf(wgt_xml, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, info->package_name);
+		preload = true;
 	}
 
 	_LOGD("wgt xml = [%s]", wgt_xml);
+
+	__coretpk_parser_hybrid_convert_api_visibility(privilegeLevel, &apiVisibility);
+	_LOGD("hybrid_convert_api_visibility(%d => %d) is done.", privilegeLevel, apiVisibility);
+
+	/* Check privilege and visibility */
+	ret = _coretpk_installer_verify_privilege_list((char*)info->package_name, info, apiVisibility);
+	if (ret != 0) {
+		_LOGD("_coretpk_installer_verify_privilege_list(%s) failed.", info->package_name);
+		_installer_util_free_pkg_info(info);
+		return -1;
+	}
+
+	// convert core xml
+	ret = _coretpk_installer_hybrid_convert_manifest(core_xml, info->package_name, apiVisibility);
+	if (ret != 0) {
+		_LOGD("_coretpk_installer_hybrid_convert_manifest(%s, %s) failed.", core_xml, info->package_name);
+		_installer_util_free_pkg_info(info);
+		return -1;
+	}
+
+	snprintf(converted_core_xml, BUF_SIZE, "%s/%s", TEMP_DIR, CORETPK_XML);
+	_LOGD("hybrid_convert_manifest(%s) is done.", converted_core_xml);
 
 	// merge xml start
 	ret = __coretpk_parser_hybrid_to_file(wgt_xml, converted_core_xml);
@@ -638,21 +628,18 @@ int _coretpk_installer_request_hybrid(int hybridOperation, char *pPkgPath, int a
 	_LOGD("hybrid_to_file(%s, %s) success", wgt_xml, converted_core_xml);
 
 	// make directory
-	ret = _coretpk_installer_make_directory((char*)mfx->package);
+	ret = _coretpk_installer_make_directory((char*)info->package_name, preload);
 	//tryvm_if(ret != 0, ret = RPM_INSTALLER_ERR_WRONG_PARAM, "_coretpk_installer_make_directory(%s) failed.", mfx->package);
-	_LOGD("make_directory(%s) success", mfx->package);
+	_LOGD("make_directory(%s) success", info->package_name);
 
 	// apply smack to app dir
-	ret = _coretpk_installer_apply_smack((char*)mfx->package, 1);
+	ret = _coretpk_installer_apply_smack((char*)info->package_name, 1);
 	//tryvm_if(ret != 0, ret = RPM_INSTALLER_ERR_WRONG_PARAM, "@Failed to apply_smack");
-	_LOGD("apply_smack(%s, %d) success", mfx->package, ret);
+	_LOGD("apply_smack(%s, %d) success", info->package_name, ret);
 
 	// apply smack by privilege
-	if (strlen((char*)mfx->package) < BUF_SIZE - strlen(".native") - 1) {
-		strcat(native_id, (char*)mfx->package);
-		strcat(native_id, ".native");
-	} else
-		_LOGE("package name too long[%s]", (char *)mfx->package);
+	strncat(native_id, (char*)info->package_name, BUF_SIZE - strlen(native_id) - 1);
+	strncat(native_id, ".native", BUF_SIZE - strlen(native_id) - 1);
 
 	ret = _ri_privilege_register_package(native_id);
 	if (ret != 0) {
@@ -668,19 +655,19 @@ int _coretpk_installer_request_hybrid(int hybridOperation, char *pPkgPath, int a
 		_LOGD("_coretpk_installer_apply_privilege(%s) success.", native_id);
 	}
 
-	ret = perm_app_add_friend((char*)mfx->package, native_id);
+	ret = perm_app_add_friend((char*)info->package_name, native_id);
 	if (ret != 0) {
-		_LOGE("perm_app_add_friend(%s, %s, %d) failed", mfx->package, native_id, ret);
+		_LOGE("perm_app_add_friend(%s, %s, %d) failed", info->package_name, native_id, ret);
 	} else {
 		_LOGD("perm_app_add_friend(%s) success.", native_id);
 	}
 
-	pkgmgr_parser_free_manifest_xml(mfx);
+	_installer_util_free_pkg_info(info);
 
-	const char *delete_argv[] = {"/bin/rm", "-rf", TEMP_XML_DIR, NULL};
+	const char *delete_argv[] = {"/bin/rm", "-rf", TEMP_DIR, NULL};
 	ret = _ri_xsystem(delete_argv);
 	if(ret != 0){
-		_LOGE("delete the directory failed. [%s]",TEMP_XML_DIR);
+		_LOGE("delete the directory failed. [%s]",TEMP_DIR);
 		//return RPM_INSTALLER_ERR_INTERNAL;
 	}
 

@@ -24,20 +24,22 @@
 #include <pthread.h>
 #include <string.h>
 #include <device/power.h>
+#include <libxml/parser.h>
+#include <unistd.h>
 
 #include "rpm-frontend.h"
-#include "rpm-installer-util.h"
+#include "installer-type.h"
 #include "rpm-installer.h"
 #include <pkgmgr_installer.h>
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+#include "installer-util.h"
+#endif
 
-#define CONFIG_PATH		"/usr/etc/rpm-installer-config.ini"
-static void __ri_start_processing(void *user_data);
+static int __ri_start_processing(void *user_data);
 static int __ri_is_signature_verification_enabled();
 
-int ret_val = -1;
 /*flag to check whether signature verification is on/off*/
 int sig_enable = 0;
-int broadcast_disable = 0;
 extern char scrolllabel[256];
 extern ri_frontend_data front_data;
 pkgmgr_installer *pi = NULL;
@@ -50,9 +52,9 @@ static int __ri_is_signature_verification_enabled()
 	FILE *fi = NULL;
 	int len = 0;
 	int ret = 0;
-	fi = fopen(CONFIG_PATH, "r");
+	fi = fopen(RPM_CONFIG_PATH, "r");
 	if (fi == NULL) {
-		_LOGE("Failed to open config file [%s]\n", CONFIG_PATH);
+		_LOGE("Failed to open config file [%s]\n", RPM_CONFIG_PATH);
 		return 0;
 	}
 	while (fgets(buffer, 1024, fi) != NULL) {
@@ -78,41 +80,31 @@ static int __ri_is_signature_verification_enabled()
 }
 
 
-static void __ri_start_processing(void *user_data)
+static int __ri_start_processing(void *user_data)
 {
 	int ret = 0;
 	if (user_data == NULL) {
 		_LOGE("arg supplied is NULL \n");
-		return;
+		return -1;
 	}
 	ri_frontend_data *data = (ri_frontend_data *) user_data;
 	ret = _ri_cmdline_process(data);
-	ret_val = ret;
 	_ri_cmdline_destroy(data);
 
+	return ret;
 }
 
 int main(int argc, char *argv[])
 {
 	int i = 0;
 	int ret = 0;
-	char *errstr = NULL;
 	ri_frontend_cmdline_arg *data = NULL;
-	struct stat st;
 
 	_LOGD("------------------------------------------------");
-	_LOGD(" [START] rpm-installer: version=[%s]", RPM_INSTALLER_VERSION);
+	_LOGD(" [START] rpm-installer: version=[%s]", INSTALLER_VERSION);
 	_LOGD("------------------------------------------------");
 
-	// hybrid
-	ret = _ri_parse_hybrid(argc, argv);
-	if (ret == RPM_INSTALLER_SUCCESS) {
-		_LOGD("------------------------------------------------");
-		_LOGD(" [END] rpm-installer: _ri_parse_hybrid() succeed.");
-		_LOGD("------------------------------------------------");
-		fprintf(stdout, "%d", ret);
-		return 0;
-	}
+	__ri_privilege_perm_begin();
 
 	for (i = 0; i < argc; i++)
 	{
@@ -121,6 +113,14 @@ int main(int argc, char *argv[])
 		{
 			_LOGD("argv[%d] = [%s]", i, pStr);
 		}
+	}
+
+	// hybrid, preload, csc, fota
+	ret = _ri_parse_command_arg(argc, argv);
+	if (ret != RPM_INSTALLER_ERR_WRONG_PARAM) {
+		_LOGE("[END] _ri_parse_command_arg() finished. ret=[%d]", ret);
+		__ri_privilege_perm_end();
+		return ret;
 	}
 
 	// power_lock
@@ -133,7 +133,7 @@ int main(int argc, char *argv[])
 
 	/*get signature verification config*/
 	sig_enable = __ri_is_signature_verification_enabled();
-	_LOGD("signature verification mode is [%s]", sig_enable?"on":"off");
+	//_LOGD("signature verification mode is [%s]", sig_enable?"on":"off");
 
 	data = (ri_frontend_cmdline_arg *) calloc(1,
 						  sizeof
@@ -145,8 +145,15 @@ int main(int argc, char *argv[])
 	}
 	data->keyid = NULL;
 	data->pkgid = NULL;
+	data->pkg_chksum = NULL;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	data->tep_path = NULL;
+#endif
 	data->req_cmd = INVALID_CMD;
 	data->move_type = -1;
+#ifdef _APPFW_FEATURE_SUPPORT_DEBUGMODE_FOR_SDK
+	data->debug_mode = false;
+#endif
 
 	/* We need to use pkgmgr_installer_receive request()
 	   to parse the arguments */
@@ -156,71 +163,76 @@ int main(int argc, char *argv[])
 		goto ERROR;
 	}
 
-#if 0
-	/*
-	Check for converted wgt package.
-	*/
-	if(strstr(data->pkgid,".wgt") != NULL){
-		_LOGD("[%s] is eflwgt package.\n", data->pkgid);
-		if(data->req_cmd == INSTALL_CMD){
-			data->req_cmd = EFLWGT_INSTALL_CMD;
-	       		ret = _ri_process_wgt_package(&data->pkgid);
-			if(ret != RPM_INSTALLER_SUCCESS){
-				_ri_error_no_to_string(ret, &errstr);
-				_LOGE("ERROR:[%s]",errstr);
-				goto ERROR;
-			}
-		}else{
-			ret = RPM_INSTALLER_ERR_CMD_NOT_SUPPORTED;
-			_ri_error_no_to_string(ret,&errstr);
-			_LOGE("ERROR:[%s]",errstr);
-			goto ERROR;
-		}
-	}
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	_LOGD("_ri_parse_cmdline success \n");
+	_LOGD("Received command is %d\n", data->req_cmd);
 #endif
 
-	if (strstr(data->keyid, "change-state") != NULL) {
-		_LOGE("change-state for [%s]\n", data->pkgid);
-		if (data->req_cmd == INSTALL_CMD) {
-			data->req_cmd = ENABLE_CMD;
-		} else if (data->req_cmd == DELETE_CMD) {
-			data->req_cmd = DISABLE_CMD;
-		} else {
-			ret = RPM_INSTALLER_ERR_CMD_NOT_SUPPORTED;
-			_ri_error_no_to_string(ret,&errstr);
-			_LOGE("ERROR:[%s]",errstr);
-			goto ERROR;
-		}
-	}
-
-	/*installation for coretpk*/
-	if ((strstr(argv[0], "coretpk") != NULL)
-			&& (data->req_cmd == INSTALL_CMD)) {
-		if (stat(data->pkgid, &st)) {
-			ret = RPM_INSTALLER_ERR_UNKNOWN;
-			_ri_error_no_to_string(ret, &errstr);
-			_LOGE("ERROR:[%s]",errstr);
-			goto ERROR;
-		}
-
-		if (S_ISDIR(st.st_mode)) {
+	if(data->req_cmd == INSTALL_CMD){
+		/*directory installation for coretpk*/
+		if (strstr(data->keyid, "coretpk") != NULL) {
 			_LOGD("[%s] is directory for tpk.\n", data->pkgid);
 			data->req_cmd = CORETPK_DIRECTORY_INSTALL_CMD;
-		} else {
-			_LOGD("[%s] is tpk package.\n", data->pkgid);
-			data->req_cmd = CORETPK_INSTALL_CMD;
+			goto process_request;
 		}
+
+		// installation for watch-app
+		if (strstr(data->keyid, "watch-install") != NULL) {
+			_LOGD("[%s] is installation for watch.", data->pkgid);
+			data->req_cmd = CORETPK_WATCH_INSTALL_CMD;
+			goto process_request;
+		}
+
+		/*installation for coretpk*/
+		if ((strstr(data->keyid, ".tpk") != NULL)
+			|| (strstr(data->pkgid,".wgt") != NULL)
+			|| (__is_dir(data->pkgid))) {
+			_LOGE("[%s] is tpk package.\n", data->pkgid);
+			data->req_cmd = CORETPK_INSTALL_CMD;
+			goto process_request;
+		}
+
+#ifdef _APPFW_FEATURE_DELTA_UPDATE
+		/*installation for delta package*/
+		if (strstr(data->keyid, DELTA_EXTENSION) != NULL) {
+			_LOGE("[%s] is delta tpk package.\n", data->pkgid);
+			data->req_cmd = CORETPK_DELTA_INSTALL_CMD;
+			goto process_request;
+		}
+#endif
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+		if (data->tep_path){
+			if (strstr(data->keyid, ".tep") != NULL){
+				data->req_cmd = INSTALL_TEP_CMD;
+				goto process_request;
+			}
+		}
+	} else if(data->req_cmd == INSTALL_TEP_CMD){
+		_LOGD("data->req_cmd [%d]", INSTALL_TEP_CMD);
+		goto process_request;
+#endif
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+	} else if(data->req_cmd == CORETPK_MOUNT_INSTALL_CMD) {	/* Mount based installation */
+		_LOGE("[%s] is mount install.\n", data->pkgid);
+		goto process_request;
+#endif
+
 	}
+
+process_request:
 
 	front_data.args = data;
 	front_data.security_cookie = NULL;
 	front_data.error = NULL;
 
-	__ri_start_processing(&front_data);
+	ret = __ri_start_processing(&front_data);
 
-	ret = ret_val;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	if ((data->keyid && (strstr(data->keyid, ".tpk") != NULL)) || (data->pkgid && (strstr(data->pkgid,".wgt") != NULL))) {
+#else
 	if ((strstr(data->keyid, ".tpk") != NULL) || (strstr(data->pkgid,".wgt") != NULL)) {
-		if(!ret_val) {
+#endif
+		if(!ret) {
 			_LOGD("sync() start");
 			sync();
 			_LOGD("sync() end");
@@ -242,10 +254,11 @@ ERROR:
 	}
 
 	xmlCleanupParser();
+	__ri_privilege_perm_end();
+
 	_LOGD("------------------------------------------------");
 	_LOGD(" [END] rpm-installer: result=[%d]", ret);
 	_LOGD("------------------------------------------------");
-
 
 	return ret;
 

@@ -26,20 +26,6 @@
 #include <pkgmgr_installer.h>
 #include <bundle.h>
 
-#ifndef APP_DIR
-#define APP_DIR	"/usr"
-#endif				/* APP_DIR */
-
-#ifndef LOCALE_PATH
-#define LOCALE_PATH		APP_DIR"/share/locale"
-#endif				/* LOCALE_PATH */
-
-#ifndef PACKAGE
-#define PACKAGE	"rpm-installer"
-#endif				/* PACKAGE */
-
-#define RPM_INSTALLER_VERSION "20141016.1"
-
 enum command {
 	INVALID_CMD = -1,
 	INSTALL_CMD = 1,
@@ -50,20 +36,38 @@ enum command {
 	MOVE_CMD = 6,
 	SMACK_CMD = 7,
 	EFLWGT_INSTALL_CMD = 8,
-	ENABLE_CMD = 9,
-	DISABLE_CMD = 10,
 	CORETPK_INSTALL_CMD = 11,
 	CORETPK_DIRECTORY_INSTALL_CMD = 12,
 	CORETPK_REINSTALL_CMD = 13,
-	RPM_CMD_MAX = 14,
+	CORETPK_CSC_CMD = 14,
+	CORETPK_WATCH_INSTALL_CMD = 15,
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	INSTALL_TEP_CMD = 16,
+#endif
+#ifdef _APPFW_FEATURE_DELTA_UPDATE
+	CORETPK_DELTA_INSTALL_CMD = 17,
+#endif
+#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+	CORETPK_MOUNT_INSTALL_CMD = 18,
+#endif
+	RPM_CMD_MAX = 99,
 };
 
 struct ri_frontend_cmdline_arg_t {
 	int req_cmd;
 	char *pkgid;
 	char *keyid;
+#ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
+	char *tep_path;
+	int tep_move;
+#endif
 	int move_type;
 	char *clientid;
+#ifdef _APPFW_FEATURE_SUPPORT_DEBUGMODE_FOR_SDK
+	bool debug_mode;
+#endif
+	char *optional_data;
+	char *pkg_chksum;
 };
 typedef struct ri_frontend_cmdline_arg_t ri_frontend_cmdline_arg;
 
@@ -78,7 +82,7 @@ typedef struct ri_frontend_data_t ri_frontend_data;
 
 int _ri_cmdline_destroy(ri_frontend_data *data);
 int _ri_cmdline_process(ri_frontend_data *data);
-int _ri_parse_hybrid(int argc, char **argv);
+int _ri_parse_command_arg(int argc, char **argv);
 int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data);
 void _ri_stat_cb(const char *pkgid, const char *key, const char *val);
 
