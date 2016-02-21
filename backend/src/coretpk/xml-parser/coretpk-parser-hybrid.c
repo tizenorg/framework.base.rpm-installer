@@ -569,7 +569,7 @@ int _coretpk_installer_hybrid_convert_manifest(char *manifest, const char* pkgid
 
 	ret = mkdir(TEMP_XML_DIR, DIRECTORY_PERMISSION_755);
 	if (ret != 0 && errno != EEXIST) {
-		_LOGE("mkdir()", errno);
+		_LOGE("mkdir(%d)", errno);
 		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 

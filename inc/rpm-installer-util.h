@@ -155,6 +155,7 @@ typedef struct privilegeinfo_t privilegeinfo;
 #define RPM_INSTALLER_ERR_PRIVILEGE_UNAUTHORIZED	43
 #define RPM_INSTALLER_ERR_PRIVILEGE_UNKNOWN	44
 #define RPM_INSTALLER_ERR_PRIVILEGE_USING_LEGACY_FAILED	45
+#define RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION	5
 
 #define RPM_INSTALLER_SUCCESS_STR			"Success"
 #define RPM_INSTALLER_ERR_WRONG_PARAM_STR		"Wrong Input Param"
@@ -189,6 +190,7 @@ typedef struct privilegeinfo_t privilegeinfo;
 #define RPM_INSTALLER_ERR_PRIVILEGE_UNAUTHORIZED_STR "Unauthorized privilege"
 #define RPM_INSTALLER_ERR_PRIVILEGE_UNKNOWN_ERR_STR "Unknown privilege"
 #define RPM_INSTALLER_ERR_PRIVILEGE_USING_LEGACY_FAILED_STR "Deprecated privilege"
+#define RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION_STR	"API Version Not supported"
 
 #define DEBUG_ERR		0x0001
 #define DEBUG_INFO		0x0002

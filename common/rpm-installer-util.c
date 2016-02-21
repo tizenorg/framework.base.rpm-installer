@@ -156,6 +156,9 @@ void _ri_error_no_to_string(int errnumber, char **errstr)
 	case RPM_INSTALLER_ERR_PRIVILEGE_USING_LEGACY_FAILED:
 		*errstr = RPM_INSTALLER_ERR_PRIVILEGE_USING_LEGACY_FAILED_STR;
 		break;
+	case RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION:
+		*errstr = RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION_STR;
+		break;
 	default:
 		*errstr = RPM_INSTALLER_ERR_UNKNOWN_STR;
 		break;
@@ -239,6 +242,8 @@ int _ri_string_to_error_no(char *errstr)
 		errnumber = RPM_INSTALLER_ERR_PRIVILEGE_UNKNOWN;
 	else if (strcmp(errstr, RPM_INSTALLER_ERR_PRIVILEGE_USING_LEGACY_FAILED_STR) == 0)
 		errnumber = RPM_INSTALLER_ERR_PRIVILEGE_USING_LEGACY_FAILED;
+	else if (strcmp(errstr, RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION_STR) == 0)
+		errnumber = RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION;
 	else
 		errnumber = RPM_INSTALLER_ERR_UNKNOWN;
 
