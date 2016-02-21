@@ -2828,14 +2828,12 @@ int _coretpk_installer_install_package(const char *pkgfile, const pkginfo * pkg_
 			_installer_util_delete_dir(root_path);
 		}
 
-#ifdef _APPFW_FEATURE_PKGNAME_RESTRICTION
 		/*pkgid should not be same with SMACK label used by system*/
 		if (security_server_check_domain_name(pkgid) == SECURITY_SERVER_API_SUCCESS) {
 			_LOGE("Cannot install this pkg[%s] : It has invalid pkg name", pkgid);
 			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto err;
 		}
-#endif
 
 		/* pre_install */
 		ret = __pre_install_for_mmc(pkgid, pkgfile, &dir_list, &handle, pkg_file_info->install_location);
