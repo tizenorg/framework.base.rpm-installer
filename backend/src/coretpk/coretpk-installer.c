@@ -56,74 +56,6 @@ extern GList *privilege_list;
 int _coretpk_installer_get_group_id(char *pkgid, char **result);
 void _coretpk_installer_set_privilege_setup_path(char *pkgid, char *dirpath, app_path_type_t type, char *label);
 
-int __coretpk_patch_padded_api_version(const char *api_version, char **pad_api_version)
-{
-	char *pad_version = NULL;
-	char *ptr_fw = NULL;
-	char *ptr_bw = NULL;
-
-	pad_version = strdup(api_version);
-	if (pad_version == NULL) {
-		_LOGE("out of memory");
-		return RPM_INSTALLER_ERR_NOT_ENOUGH_MEMORY;
-	}
-
-	ptr_fw = strchr(pad_version, '.');
-	ptr_bw = strrchr(pad_version, '.');
-
-	if (ptr_fw && ptr_bw) {
-		if (ptr_fw == ptr_bw) {
-			pad_version = strncat(pad_version, ".0", BUF_SIZE - strlen(pad_version) - 1);
-		}
-	}
-
-	*pad_api_version = pad_version;
-
-	return RPM_INSTALLER_SUCCESS;
-}
-
-static int __coretpk_compare_with_platform_version(const char *api_version)
-{
-	char *current_version = NULL;
-	char *platform_version = NULL;
-	int ret = 0;
-	int result = 0;
-
-	if (!api_version) {
-		_LOGE("Invalid parameter");
-		return RPM_INSTALLER_ERR_WRONG_PARAM;
-	}
-
-	if (strlen(api_version) == 0) {
-		_LOGD("No api-version, assume same with platform api-version");
-		return RPM_INSTALLER_SUCCESS;
-	}
-
-	ret = __coretpk_patch_padded_api_version(api_version, &current_version);
-	if (ret != RPM_INSTALLER_SUCCESS) {
-		return RPM_INSTALLER_ERR_WRONG_PARAM;
-	}
-
-	ret = __coretpk_patch_padded_api_version(TIZEN_VERSION, &platform_version);
-	if (ret != RPM_INSTALLER_SUCCESS) {
-		return RPM_INSTALLER_ERR_WRONG_PARAM;
-	}
-
-	_LOGD("platform_version(%s) vs. current_version(%s)", platform_version, current_version);
-
-	result = strverscmp(platform_version, current_version);
-	if (result < 0) {
-		ret = RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION;
-	} else {
-		ret = RPM_INSTALLER_SUCCESS;
-	}
-
-	FREE_AND_NULL(current_version);
-	FREE_AND_NULL(platform_version);
-
-	return ret;
-}
-
 static int __get_unzip_size(const char *item, unsigned long long *size)
 {
 	if (!item || !size) {
@@ -2179,25 +2111,6 @@ int _coretpk_installer_package_install(char *pkgfile, char *pkgid, char *clienti
 	_ri_broadcast_status_notification(pkgid, "coretpk", "start", "install");
 	_LOGD("[#]start : _coretpk_installer_package_install[%s]", pkgid);
 
-	/*get pkginfo*/
-	info = _coretpk_installer_get_pkgfile_info(pkgfile);
-	if (info == NULL || (strlen(info->package_name) == 0)) {
-		_LOGE("failed to get pkg info");
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-
-	/*compare package's api version with platform version*/
-	ret = __coretpk_compare_with_platform_version(info->api_version);
-	if (ret != RPM_INSTALLER_SUCCESS) {
-		if (ret == RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION) {
-			_LOGE("Unable to install. Platform version[%s] < Package version[%s]",
-				TIZEN_VERSION, info->api_version);
-		}
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-
 	/*send event for install_percent*/
 	_ri_broadcast_status_notification(pkgid, "coretpk", "install_percent", "30");
 
@@ -2250,7 +2163,7 @@ int _coretpk_installer_package_install(char *pkgfile, char *pkgid, char *clienti
 		_LOGD("signature and certificate are verified successfully.");
 	}
 
-	/*chdir*/
+   /*chdir*/
 	ret = chdir(cwd);
 	if (ret != 0) {
 		_LOGL("chdir()", errno);
@@ -2318,6 +2231,13 @@ int _coretpk_installer_package_install(char *pkgfile, char *pkgid, char *clienti
 	ret = _coretpk_installer_apply_smack(pkgid, 1);
 	if (ret != 0) {
 		_LOGE("failed to apply the smack.");
+		goto err;
+	}
+
+	info = _coretpk_installer_get_pkgfile_info(pkgfile);
+	if (info == NULL || (strlen(info->package_name) == 0)) {
+		_LOGE("failed to get pkg info");
+		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
 
@@ -2467,25 +2387,6 @@ int _coretpk_installer_package_upgrade(char *pkgfile, char *pkgid, char *clienti
 	/*send event for start*/
 	_ri_broadcast_status_notification(pkgid, "coretpk", "start", "update");
 
-	/*get pkginfo*/
-	info = _coretpk_installer_get_pkgfile_info(pkgfile);
-	if (info == NULL || strlen(info->package_name) == 0) {
-		_LOGE("failed to get pkg info");
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-
-	/*compare package's api version with platform version*/
-	ret = __coretpk_compare_with_platform_version(info->api_version);
-	if (ret != RPM_INSTALLER_SUCCESS) {
-		if (ret == RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION) {
-			_LOGE("Unable to install. Platform version[%s] < Package version[%s]",
-				TIZEN_VERSION, info->api_version);
-		}
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto err;
-	}
-
 	/*terminate running app*/
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkghandle);
 	if (ret < 0) {
@@ -2496,7 +2397,7 @@ int _coretpk_installer_package_upgrade(char *pkgfile, char *pkgid, char *clienti
 	pkgmgrinfo_appinfo_get_list(pkghandle, PMINFO_UI_APP, __ri_check_running_app, NULL);
 	pkgmgrinfo_pkginfo_destroy_pkginfo(pkghandle);
 
-	/*remove dir for clean*/
+    /*remove dir for clean*/
 	__ri_remove_updated_dir(pkgid);
 
 	/* pre_upgrade */
@@ -2546,7 +2447,7 @@ int _coretpk_installer_package_upgrade(char *pkgfile, char *pkgid, char *clienti
 		_LOGD("#signature and certificate verifying success");
 	}
 
-	/*chdir*/
+   /*chdir*/
 	ret = chdir(cwd);
 	if (ret != 0) {
 		_LOGL("chdir()", errno);
@@ -2629,6 +2530,13 @@ int _coretpk_installer_package_upgrade(char *pkgfile, char *pkgid, char *clienti
 		_LOGE("@Failed to apply permission[%d].", ret);
 	}
 	_LOGD("#permission applying success.");
+
+	info = _coretpk_installer_get_pkgfile_info(pkgfile);
+	if (info == NULL || strlen(info->package_name) == 0) {
+		_LOGE("failed to get pkg info");
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
 
 	// Check privilege and visibility
 	if (privilege_list) {
@@ -3342,7 +3250,7 @@ int _coretpk_installer_package_reinstall(char *pkgid, char *clientid)
 		_LOGD("signature and certificate verifying success");
 	}
 
-	/*chdir*/
+   /*chdir*/
 	ret = chdir(cwd);
 	if (ret != 0) {
 		_LOGL("chdir()", errno);
@@ -3373,25 +3281,6 @@ int _coretpk_installer_package_reinstall(char *pkgid, char *clientid)
 		if(ret < 0) {
 			_LOGE("@invalid manifest file");
 			ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
-			goto err;
-		}
-
-		/*get pkginfo*/
-		info = _coretpk_installer_get_pkg_info(manifest);
-		if (info == NULL || strlen(info->package_name) == 0) {
-			_LOGE("failed to get pkg info");
-			ret = RPM_INSTALLER_ERR_INTERNAL;
-			goto err;
-		}
-
-		/*compare package's api version with platform version*/
-		ret = __coretpk_compare_with_platform_version(info->api_version);
-		if (ret != RPM_INSTALLER_SUCCESS) {
-			if (ret == RPM_INSTALLER_ERR_NOT_SUPPORTED_API_VERSION) {
-				_LOGE("Unable to install. Platform version[%s] < Package version[%s]",
-					TIZEN_VERSION, info->api_version);
-			}
-			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto err;
 		}
 
@@ -3432,6 +3321,13 @@ int _coretpk_installer_package_reinstall(char *pkgid, char *clientid)
 		_LOGE("@Failed to apply permission[%d].", ret);
 	}
 	_LOGD("#permission applying success.");
+
+	info = _coretpk_installer_get_pkg_info(manifest);
+	if (info == NULL || strlen(info->package_name) == 0) {
+		_LOGE("failed to get pkg info");
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
 
 	// Check privilege and visibility
 	if (privilege_list) {

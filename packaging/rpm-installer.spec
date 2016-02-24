@@ -64,8 +64,7 @@ export CFLAGS="$CFLAGS -DMOBILE"
 %endif
 %endif
 
-cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} \
-				-DTIZEN_VERSION=%{tizen_version}
+cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix}
 
 make %{?jobs:-j%jobs}
 

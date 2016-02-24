@@ -16,12 +16,6 @@ SET(VERSION 1.0)
 
 set(CMAKE_SKIP_BUILD_RPATH true)
 
-IF(TIZEN_VERSION)
-        ADD_DEFINITIONS("-DTIZEN_VERSION=\"${TIZEN_VERSION}\"")
-ELSE(TIZEN_VERSION)
-        message(FATAL_ERROR "TIZEN_VERSION MUST BE declared on build flag.")
-ENDIF(TIZEN_VERSION)
-
 configure_file(rpm_installer_deactvation_list.txt.in rpm_installer_deactvation_list.txt @ONLY)
 INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/rpm_installer_deactvation_list.txt DESTINATION /opt/share/packages/.pkgmgr/rpm-installer/)
 
