@@ -603,14 +603,6 @@ int _coretpk_installer_request_hybrid(int hybridOperation, const char *pPkgPath,
 	__coretpk_parser_hybrid_convert_api_visibility(privilegeLevel, &apiVisibility);
 	_LOGD("hybrid_convert_api_visibility(%d => %d) is done.", privilegeLevel, apiVisibility);
 
-	/* Check privilege and visibility */
-	ret = _coretpk_installer_verify_privilege_list((char*)info->package_name, info, apiVisibility);
-	if (ret != 0) {
-		_LOGD("_coretpk_installer_verify_privilege_list(%s) failed.", info->package_name);
-		_installer_util_free_pkg_info(info);
-		return -1;
-	}
-
 	// convert core xml
 	ret = _coretpk_installer_hybrid_convert_manifest(core_xml, info->package_name, apiVisibility);
 	if (ret != 0) {

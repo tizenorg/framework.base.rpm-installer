@@ -145,7 +145,6 @@ int main(int argc, char *argv[])
 	}
 	data->keyid = NULL;
 	data->pkgid = NULL;
-	data->pkg_chksum = NULL;
 #ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
 	data->tep_path = NULL;
 #endif

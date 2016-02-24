@@ -44,6 +44,10 @@ extern "C" {
 
 int _coretpk_installer_package_reinstall(const char *dirpath, const char *clientid);
 
+int _coretpk_installer_csc_install(const char *path_str, const char *remove_str, const char *csc_script);
+int _coretpk_installer_csc_upgrade(const char *path_str, const char *remove_str, const char *csc_script);
+int _coretpk_installer_csc_uninstall(const char *pkgid);
+
 pkginfo *_coretpk_installer_get_pkgfile_info(const char *pkgfile, int cmd);
 
 int _coretpk_installer_change_mode(const char* path, int mode);
@@ -61,9 +65,6 @@ int _coretpk_installer_remove_db_info(const char *pkgid);
 
 int __coretpk_patch_trimmed_api_version(const char *api_version, char **trim_api_version);
 int __coretpk_patch_padded_api_version(const char *api_version, char **pad_api_version);
-
-int __coretpk_installer_csc_install(const char *path_str, const char *remove_str, const char *csc_script);
-int __coretpk_installer_csc_uninstall(const char *pkgid);
 
 #ifdef _APPFW_FEATURE_MOUNT_INSTALL
 int _coretpk_dbus_mount_file(char *mnt_path[], const char *pkgid);

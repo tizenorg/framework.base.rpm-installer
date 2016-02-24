@@ -33,8 +33,6 @@ int _coretpk_installer_prepare_package_install_with_debug(const char *pkgid, con
 int _coretpk_installer_prepare_package_uninstall(const char *pkgid);
 int _coretpk_installer_prepare_preload_install(const char* dirpath, const char *clientid, const cmdinfo* cmd_info);
 int _coretpk_installer_prepare_preload_uninstall(const char* pkgid);
-int _coretpk_installer_prepare_fota(char *fota_script, bool is_opt_pkg);
-int _coretpk_installer_prepare_csc(const char *csc_script);
 int _coretpk_installer_package_move(const char* pkgid, int movetype);
 int _coretpk_installer_request_hybrid(int hybridOperation, const char* pPkgPath, int apiVisibility);
 
@@ -49,7 +47,6 @@ int _coretpk_installer_prepare_delta_install(const char* dirpath, const char* cl
 
 #ifdef _APPFW_FEATURE_MOUNT_INSTALL
 int _coretpk_installer_prepare_mount_install(const char *pkg_file, const char *client_id, bool preload, const cmdinfo * cmd_info);
-int _coretpk_mount_install_parser_convert_manifest(const char *tizen_manifest, const char *pkgid, const char *clientid, bool hybrid, int api_visibility, const bundle *optional_data);
 #endif
 
 #ifdef __cplusplus

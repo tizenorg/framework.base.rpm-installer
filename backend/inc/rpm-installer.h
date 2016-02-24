@@ -119,6 +119,9 @@ extern "C" {
 
 	int _rpm_install_corexml(const char *pkgfilepath, char *pkgid);
 	int _rpm_process_cscxml(char *xml_path);
+	int _rpm_process_csc_coretpk(const char *xml_path);
+	int _rpm_process_fota(char *fota_script);
+	int _rpm_process_fota_for_rw(char *fota_script);
 
 	int _ri_set_backend_state(int state);
 	int _ri_get_backend_state();

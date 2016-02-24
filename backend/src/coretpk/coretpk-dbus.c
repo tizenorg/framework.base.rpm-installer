@@ -37,6 +37,7 @@ int _coretpk_dbus_mount_file(char *mnt_path[], const char *pkgid)
 	int func_ret = 0;
 	int rv = 0;
 	struct stat link_buf = {0,};
+	DBusError err;
 
 	DBusConnection *conn = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
 	if(!conn){
@@ -82,6 +83,7 @@ func_out :
 
 int _coretpk_dbus_unmount_file(char *mnt_path)
 {
+	DBusError err;
 	_LOGD("__tpk_unmount called [%s]", mnt_path);
 
 	DBusConnection *conn = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);

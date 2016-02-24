@@ -47,7 +47,7 @@ int _installer_util_create_dir(const char* dirpath, mode_t mode)
 	if (ret < 0) {
 		if (access(dirpath, F_OK) == 0) {
 			_installer_util_delete_dir(dirpath);
-			ret = _installer_util_mkpath(dirpath, mode);
+			ret = mkdir(dirpath, mode);
 			if (ret < 0) {
 				if( strerror_r(errno, buf, sizeof(buf)) == 0) {
 					_LOGE("mkdir(%s) failed. [%d][%s]", dirpath, errno, buf);
@@ -215,7 +215,7 @@ int _installer_util_copy_dir(const char *src_dir, const char *dest_dir)
 	tryvm_if(dp == NULL, ret = -1, "opendir(%s) failed. [%d][%s]", src_dir, errno, buf);
 
 	if (access(dest_dir, F_OK) != 0) {
-		ret = _installer_util_mkpath(dest_dir, DIRECTORY_PERMISSION_755);
+		ret = mkdir(dest_dir, DIRECTORY_PERMISSION_755);
 		if (ret < 0) {
 			strerror_r(errno, buf, sizeof(buf));
 			LOGE("mkdir() err: [%s]", buf);

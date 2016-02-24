@@ -67,7 +67,6 @@ struct ri_frontend_cmdline_arg_t {
 	bool debug_mode;
 #endif
 	char *optional_data;
-	char *pkg_chksum;
 };
 typedef struct ri_frontend_cmdline_arg_t ri_frontend_cmdline_arg;
 

@@ -66,11 +66,6 @@ extern "C" {
 #define RES_DIR_STR												"res"
 #define SHARED_RES_DIR_STR								"shared/res"
 
-#ifdef _APPFW_FEATURE_MOUNT_INSTALL
-#define MIC_ENV													"/tmp/alaunch/-2"
-#define PKG_NAME_STRING_LEN_MAX								128
-#endif
-
 #define PRELOAD_WATCH_FACE_PATH						"/usr/apps/com.samsung.watchface"
 
 #define CORETPK_XML												"tizen-manifest.xml"
@@ -107,7 +102,7 @@ static const int VERSION_NEW = 2;
 #ifdef _APPFW_FEATURE_DELTA_UPDATE
 #define CORETPK_DELTA_INSTALL					"coretpk-delta-install"
 #endif
-#ifdef _APPFW_FEATURE_MOUNT_INSTALL
+#ifdef _APPFW_FEATURE_DELTA_UPDATE
 #define CORETPK_MOUNT_INSTALL					"coretpk-mount-install"
 #endif
 #define CORETPK_MOVE											"coretpk-move"
@@ -186,7 +181,6 @@ typedef struct pkginfo_t {
 	char client_id[PKG_MAX_LEN];
 	char api_version[BUF_SIZE];
 	char sig_capath[BUF_SIZE];
-	char pkg_chksum[BUF_SIZE];
 	bool is_widget;
 	bool is_preload;
 	bool support_disable;
@@ -202,7 +196,6 @@ typedef struct privilegeinfo_t {
 
 typedef struct cmdinfo_t {
 	bool support_disable;
-	char pkg_chksum[BUF_SIZE];
 } cmdinfo;
 
 cert_chain list[MAX_CERT_NUM];
@@ -335,16 +328,6 @@ typedef struct delta_info_t{
 #define	_LOGD(fmt, arg...) do {	\
 	fprintf(stderr, "  ## "fmt"\n", ##arg);	\
 	LOGD(fmt, ##arg);	\
-} while(0)
-
-#define	_SLOGE(fmt, arg...) do {        \
-	fprintf(stderr, "  ## "fmt"\n", ##arg); \
-	SECURE_LOGE(fmt, ##arg);        \
-} while(0)
-
-#define	_SLOGD(fmt, arg...) do {        \
-	fprintf(stderr, "  ## "fmt"\n", ##arg); \
-	SECURE_LOGD(fmt, ##arg);        \
 } while(0)
 
 #define	ret_if(expr) do {	\

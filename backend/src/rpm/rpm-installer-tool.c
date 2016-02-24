@@ -62,6 +62,7 @@ static int __ri_clear_private_data(char *pkgid);
 static int __ri_move_package(char *pkgid, int move_type);
 static inline int __ri_read_proc(const char *path, char *buf, int size);
 static inline int __ri_find_pid_by_cmdline(const char *dname, const char *cmdline, const char *priv);
+static bool __ri_is_another_instance_running(const char *exepath);
 
 static int __ri_uninstall_package(char *pkgid)
 {
@@ -153,6 +154,37 @@ static inline int __ri_find_pid_by_cmdline(const char *dname, const char *cmdlin
 	}
 
 	return pid;
+}
+
+static bool __ri_is_another_instance_running(const char *exepath)
+{
+	DIR *dp;
+	struct dirent entry, *result;
+	int pid;
+	int ret;
+	char buf[256] = { 0, };
+	dp = opendir("/proc");
+	if (dp == NULL) {
+		return 0;
+	}
+	for (ret = readdir_r(dp, &entry, &result);
+			ret == 0 && result != NULL;
+			ret = readdir_r(dp, &entry, &result)) {
+		if (!isdigit(entry.d_name[0]))
+			continue;
+		ret = aul_app_get_cmdline_bypid((pid_t)atoi(entry.d_name), buf, 256);
+		if (ret != 0)
+			continue;
+		pid = __ri_find_pid_by_cmdline(entry.d_name, buf, exepath);
+		if (pid > 0) {
+			closedir(dp);
+			return 1;
+		}
+	}
+
+	closedir(dp);
+	return 0;
+
 }
 
 static int __ri_native_recovery(int lastbackstate)
@@ -249,9 +281,7 @@ static int __ri_check_root_path(const char *pkgid)
 
 	snprintf(dirpath, BUF_SIZE, "%s/%s", USR_APPS, pkgid);
 
-	if (stat(pkgid, &stFileInfo) < 0) {
-		return 0;
-	}
+	(void)stat(dirpath, &stFileInfo);
 
 	if (S_ISDIR(stFileInfo.st_mode)) {
 		return 0;				/* it means "/usr/apps/pkgid" */
@@ -447,14 +477,7 @@ int _ri_init_db(const char *xml_path)
 
 	// smack
 	_LOGD("apply smack for rpm");
-#ifdef _APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY
 	__ri_make_directory(pkg_id);
-#else
-	ret = _coretpk_installer_make_directory(pkg_id, true);
-	if (ret < 0) {
-		_LOGE("_coretpk_installer_make_directory failed. ret=[%d]", ret);
-	}
-#endif
 	_ri_apply_smack(pkg_id, __ri_check_root_path(pkg_id), smack_label);
 
 	spend_time = __check_time(check_time);
@@ -615,6 +638,34 @@ static int __ri_process_smack(char *keyid, char *pkgid)
 			_LOGD("install csc xml success\n");
 		}
 
+		/* check csc coretpk */
+	} else if (strcmp(keyid, "csc-core") == 0) {
+		_LOGD("csc for coretpk\n");
+		ret = _rpm_process_csc_coretpk(pkgid);
+		if (ret != 0) {
+			_LOGE("install coretpk csc failed with err(%d)\n", ret);
+		} else {
+			_LOGD("install coretpk csc success\n");
+		}
+
+		/* check fota */
+	} else if (strcmp(keyid, "rpm-fota") == 0) {
+		_LOGD("fota process for rpm\n");
+		ret = _rpm_process_fota(pkgid);
+		if (ret != 0) {
+			_LOGE("fota process failed with err(%d)\n", ret);
+		} else {
+			_LOGD("fota process success\n");
+		}
+		/* check fota */
+	} else if (strcmp(keyid, "rpm-rw-fota") == 0) {
+		_LOGD("rw fota process for rpm\n");
+		ret = _rpm_process_fota_for_rw(pkgid);
+		if (ret != 0) {
+			_LOGE("rw fota process failed with err(%d)\n", ret);
+		} else {
+			_LOGD("rw fota process success\n");
+		}
 		/* Check initdb */
 	} else if (strcmp(keyid, "rpm_initdb") == 0) {
 		_LOGD("initdb request for rpms");
@@ -747,7 +798,6 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand, char *cli
 		 * or something went wrong in last execution
 		 * Check for it
 		 */
-		 /*
 		if (__ri_is_another_instance_running(RPM)) {
 			if (data.pkgid) {
 				_ri_broadcast_status_notification(data.pkgid, PKGTYPE_RPM, "error", "Another Instance Running");
@@ -767,8 +817,7 @@ int _rpm_backend_interface(char *keyid, char *pkgid, char *reqcommand, char *cli
 				data.cmd_string = NULL;
 			}
 			return ret;
-		} else */
-		{
+		} else {
 			int lastbackstate;
 
 			/* check the current state of backend */

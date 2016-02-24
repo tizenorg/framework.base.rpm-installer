@@ -47,11 +47,9 @@ Requires:	cpio
 %if "%{?tizen_profile_name}" == "tv"
 %define appfw_feature_support_onlycap 0
 %define appfw_feature_support_debugmode_for_sdk 0
-%define appfw_feature_directory_permission_opt_only 1
 %else
 %define appfw_feature_support_onlycap 1
 %define appfw_feature_support_debugmode_for_sdk 1
-%define appfw_feature_directory_permission_opt_only 0
 %endif
 
 %description
@@ -107,12 +105,6 @@ _SUPPORT_DEBUGMODE_FOR_SDK=ON
 _SUPPORT_DEBUGMODE_FOR_SDK=OFF
 %endif
 
-%if 0%{?appfw_feature_directory_permission_opt_only}
-_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY=ON
-%else
-_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY=OFF
-%endif
-
 
 %if "%{?tizen_profile_name}" == "wearable"
 export CFLAGS="$CFLAGS -DWEARABLE"
@@ -130,8 +122,7 @@ cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} \
 				-D_APPFW_FEATURE_SYSMAN_MMC:BOOL=${_SYSMAN_MMC} \
 				-D_APPFW_FEATURE_MOUNT_INSTALL:BOOL=${_MOUNT_INSTALL} \
 				-D_APPFW_FEATURE_SUPPORT_DEBUGMODE_FOR_SDK:BOOL=${_SUPPORT_DEBUGMODE_FOR_SDK} \
-				-D_APPFW_FEATURE_SUPPORT_ONLYCAP:BOOL=${_SUPPORT_ONLYCAP} \
-				-D_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY:BOOL=${_APPFW_FEATURE_DIRECTORY_PERMISSION_OPT_ONLY}
+				-D_APPFW_FEATURE_SUPPORT_ONLYCAP:BOOL=${_SUPPORT_ONLYCAP}
 
 make %{?jobs:-j%jobs}
 

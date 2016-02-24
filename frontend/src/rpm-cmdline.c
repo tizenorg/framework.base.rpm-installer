@@ -93,12 +93,6 @@ int _ri_parse_command_arg(int argc, char **argv)
 
 			ret = _coretpk_installer_prepare_preload_install(argv[2], NULL, NULL);
 			return ret;
-#ifdef _APPFW_FEATURE_MOUNT_INSTALL
-		} else if (!strcmp(argv[1], "-ipw")) { // preload
-			_LOGD("Mount Based Preload Installation start.");
-			ret = _coretpk_installer_prepare_mount_install(argv[2], NULL, false, NULL);
-			return ret;
-#endif
 		} else if (!strcmp(argv[1], "-ipd")) { // preload, support-disable
 			_LOGD("Preload Installation start.(support-disable)");
 
@@ -125,17 +119,12 @@ int _ri_parse_command_arg(int argc, char **argv)
 		} else if (!strcmp(argv[1], "-c")) { // csc
 			_LOGD("CSC start.");
 
-			ret = _coretpk_installer_prepare_csc(argv[2]);
+			ret = _rpm_process_csc_coretpk(argv[2]);
 			return ret;
 		} else if (!strcmp(argv[1], "-f")) { // fota
 			_LOGD("FOTA start.");
 
-			ret = _coretpk_installer_prepare_fota(argv[2], false);
-			return ret;
-		} else if (!strcmp(argv[1], "-F")) { // fota
-			_LOGD("RW FOTA start.");
-
-			ret = _coretpk_installer_prepare_fota(argv[2], true);
+			ret = _rpm_process_fota(argv[2]);
 			return ret;
 		} else if (!strcmp(argv[1], "-ix")) { // init_db
 			_LOGD("Init db start.");
@@ -256,7 +245,6 @@ int _ri_parse_cmdline(int argc, char **argv, ri_frontend_cmdline_arg *data)
 	data->move_type = move_type;
 	data->clientid = (char *)pkgmgr_installer_get_caller_pkgid(pi);
 	data->optional_data = (char*)pkgmgr_installer_get_optional_data(pi);
-	data->pkg_chksum = (char *)pkgmgr_installer_get_pkg_chksum(pi);
 #ifdef _APPFW_FEATURE_SUPPORT_DEBUGMODE_FOR_SDK
 	data->debug_mode = (bool)pkgmgr_installer_is_debug_mode(pi);
 #endif

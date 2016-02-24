@@ -290,7 +290,14 @@ static void __ri_free_cert_chain()
 
 static void __ri_xmlsec_debug_print(const char *file, int line, const char *func, const char *errorObject, const char *errorSubject, int reason, const char *msg)
 {
-	_SLOGE("[%s(%d)] : [%s] : [%s] : [%d] : [%s]", func, line, errorObject, errorSubject, reason, msg);
+	char total[BUF_SIZE];
+	snprintf(total, sizeof(total), "[%s(%d)] : [%s] : [%s] : [%s]", func, line, errorObject, errorSubject, msg);
+	if (reason != 256) {
+		fprintf(stderr, "## [validate error]: %s\n", total);
+		_LOGE("%s", total);
+	} else {
+		_LOGE("%s", total);
+	}
 }
 
 static int __ri_verify_file(xmlSecKeysMngrPtr sec_key_mngr, const char *sigxmlfile)
@@ -734,12 +741,10 @@ int __is_dir(const char *dirname)
 	struct stat stFileInfo;
 	if (dirname == NULL) {
 		_LOGE("dirname is null\n");
-		return 0;
+		return -1;
 	}
 
-	if (stat(dirname, &stFileInfo) < 0) {
-		return 0;
-	}
+	(void)stat(dirname, &stFileInfo);
 
 	if (S_ISDIR(stFileInfo.st_mode)) {
 		return 1;
@@ -1067,6 +1072,236 @@ char *__strlwr(char *str)
 		i++;
 	}
 	return str;
+}
+
+static int __ri_install_fota(const char *pkgid)
+{
+	int ret = 0;
+	int visibility = 0;
+	char manifest[BUF_SIZE] = { 0, };
+	char rw_manifest[BUF_SIZE] = { 0, };
+	char root_path[BUF_SIZE] = { 0, };
+	char signature_file[BUF_SIZE] = { 0, };
+	char *fota_version = NULL;
+	char *temp[] = { "fota=true", NULL };
+	pkginfo *db_info = NULL;
+	char *smack_label = NULL;
+
+	_LOGD("fota-info : pkgid[%s] start installation.", pkgid);
+
+	snprintf(manifest, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, pkgid);
+	snprintf(rw_manifest, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+
+	_LOGD("fota-info : pkgid[%s] has manefest[%s].", pkgid, manifest);
+
+	if (access(rw_manifest, F_OK) == 0) {
+		_LOGD("fota-info : [%s] is existed.", rw_manifest);
+
+		// compare version(db, fota)
+		db_info = _rpm_installer_get_pkgname_info(pkgid);
+		if (db_info != NULL) {
+			__get_version_from_xml(manifest, &fota_version);
+			if (fota_version != NULL) {
+				_LOGD("fota-info : dbinfo version=[%s], fota version=[%s]", db_info->version, fota_version);
+
+				ret = _installer_util_compare_version(db_info->version, fota_version);
+				if (ret == VERSION_NEW) {
+					_LOGD("fota is new version. [%s]", manifest);
+				} else {
+					_LOGD("fota is not new version. [%s]", manifest);
+				}
+			} else {
+				_LOGE("fota-info : __get_version_from_xml(%s) failed.", manifest);
+			}
+
+			if(fota_version){
+				free(fota_version);
+			}
+
+			if (db_info) {
+				free(db_info);
+			}
+
+			if (ret != VERSION_NEW) {
+				_LOGD("fota-info : [%s] installation skip. [version is not new]", pkgid);
+				return 0;
+			}
+		} else {
+			_LOGE("fota-info : _rpm_installer_get_pkgname_info(%s) failed.", pkgid);
+		}
+	}
+
+	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, temp);
+	if (ret < 0) {
+		_LOGE("fota-info : installation fail. [manifest=%s]", manifest);
+		ret = -1;
+		goto end;
+	}
+	_LOGD("fota-info : pkgid[%s] installation success.", pkgid);
+
+	snprintf(root_path, BUF_SIZE, "%s/%s", USR_APPS, pkgid);
+	ret = _ri_verify_signatures(root_path, pkgid, false);
+	if (ret == 0) {
+		_LOGD("fota-info : certificate register(%s).", pkgid);
+		_ri_register_cert(pkgid);
+	}
+
+	__ri_make_directory(pkgid);
+
+	ret = __get_smack_label_from_db(pkgid, &smack_label);
+	_LOGD("smack_label[%s], ret[%d]\n", smack_label, ret);
+
+	__rpm_apply_smack(pkgid, 0, smack_label);
+
+	snprintf(signature_file, BUF_SIZE, "%s/%s", root_path, SIGNATURE1_XML);
+	if (access(signature_file, F_OK) != 0){
+		_LOGE("[%s] is not present", signature_file);
+	} else {
+		ret = _ri_get_visibility_from_signature_file(signature_file, &visibility, false);
+		if (ret != 0) {
+			_LOGE("Couldnt get visiblity [%d], ret: %d", visibility, ret);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto end;
+		} else{
+			_LOGD("visibility : %d", visibility);
+		}
+	}
+
+	ret = _ri_apply_privilege(pkgid, visibility, smack_label);
+	if (ret < 0) {
+		_LOGE("fota-info : _ri_apply_privilege fail[pkgid=%s]\n", pkgid);
+		ret = -1;
+		goto end;
+	}
+	_LOGD("fota-info : pkgid[%s] apply smack success\n", pkgid);
+
+end:
+	FREE_AND_NULL(smack_label);
+
+	return ret;
+}
+
+static int __ri_upgrade_fota(const char *pkgid)
+{
+	_LOGD("fota-info : pkgid[%s] start upgrade.", pkgid);
+
+	int ret = 0;
+	int visibility = 0;
+	char manifest[BUF_SIZE] = { 0, };
+	char root_path[BUF_SIZE] = { 0, };
+	char signature_file[BUF_SIZE] = { 0, };
+	char *temp[] = { "fota=true", NULL };
+	char *smack_label = NULL;
+
+	/* del manifest */
+	snprintf(manifest, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+	(void)remove(manifest);
+	memset(manifest, '\0', BUF_SIZE);
+
+	snprintf(manifest, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, pkgid);
+	_LOGD("fota-info : pkgid[%s] has manefest[%s].", pkgid, manifest);
+
+	if (access(manifest, F_OK) != 0) {
+		_LOGE("fota-info : can not access[manifest=%s].", manifest);
+		ret = -1;
+		goto end;
+	}
+
+	ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, temp);
+	if (ret < 0) {
+		_LOGE("fota-info : upgrade fail[manifest=%s].", manifest);
+		ret = -1;
+		goto end;
+	}
+
+	snprintf(root_path, BUF_SIZE, "%s/%s", USR_APPS, pkgid);
+	ret = _ri_verify_signatures(root_path, pkgid, false);
+	if (ret == 0) {
+		_LOGD("fota-info : certificate register(%s).", pkgid);
+		_ri_register_cert(pkgid);
+	}
+
+	__ri_make_directory(pkgid);
+
+	ret = __get_smack_label_from_db(pkgid, &smack_label);
+	_LOGD("smack_label[%s], ret[%d]\n", smack_label, ret);
+
+	__rpm_apply_smack(pkgid, 0, smack_label);
+
+	snprintf(signature_file, BUF_SIZE, "%s/%s", root_path, SIGNATURE1_XML);
+	if (access(signature_file, F_OK) != 0){
+		_LOGE("[%s] is not present", signature_file);
+	} else {
+		ret = _ri_get_visibility_from_signature_file(signature_file, &visibility, false);
+		if (ret != 0) {
+			_LOGE("Couldnt get visiblity [%d], ret: %d", visibility, ret);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto end;
+		} else{
+			_LOGD("visibility : %d", visibility);
+		}
+	}
+
+	ret = _ri_apply_privilege(pkgid, visibility, smack_label);
+	if (ret < 0) {
+		_LOGE("fota-info : _ri_apply_privilege fail[pkgid=%s].", pkgid);
+	}
+
+	_LOGD("fota-info : pkgid[%s] upgrade success.", pkgid);
+
+end:
+	FREE_AND_NULL(smack_label);
+
+	return ret;
+}
+
+static int __ri_uninstall_fota(char *pkgid)
+{
+	_LOGD("fota-info : pkgid[%s] start uninstallation\n", pkgid);
+
+	int ret = 0;
+	char buff[BUF_SIZE] = { '\0' };
+	char *smack_label = NULL;
+
+	/* del root path dir */
+	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
+	if (__is_dir(buff)) {
+		_installer_util_delete_dir(buff);
+	}
+
+	/* del root path dir for ext */
+	char extpath[BUF_SIZE] = { '\0' };
+	snprintf(extpath, BUF_SIZE, "%s/%s", OPT_STORAGE_SDCARD_APP_ROOT, pkgid);
+	if (__is_dir(extpath)) {
+		_installer_util_delete_dir(extpath);
+	}
+
+	/* Unregister cert info */
+	_ri_unregister_cert(pkgid);
+
+	ret = __get_smack_label_from_db(pkgid, &smack_label);
+	_LOGD("smack_label[%s], ret[%d]\n", smack_label, ret);
+
+	ret = _ri_privilege_unregister_package(smack_label);
+	if (ret < 0) {
+		_LOGE("fota-info : _ri_privilege_unregister_package fail[smack_label=%s]\n", smack_label);
+	}
+
+	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
+	if (ret < 0) {
+		_LOGE("fota-info : uninstall fail[pkgid=%s]\n", pkgid);
+	}
+
+	ret = _ri_smack_reload(smack_label, UNINSTALL_REQ);
+	if (ret != 0) {
+		_LOGD("_ri_smack_reload failed.");
+	}
+
+	_LOGD("fota-info : pkgid[%s] uninstall success\n", pkgid);
+
+	FREE_AND_NULL(smack_label);
+
+	return ret;
 }
 
 static char *__getvalue(const char *pBuf, const char *pKey)
@@ -1515,8 +1750,7 @@ int _ri_get_visibility_from_signature_file(const char *sigfile, int *visibility,
 
 		err = cert_svc_load_buf_to_context(ctx, (unsigned char *)certval);
 		if (err != 0) {
-			_LOGE("cert_svc_load_buf_to_context() failed. err = [%d]", err);
-			_SLOGE("cert_svc_load_buf_to_context() failed. cert = [%s]", certval);
+			_LOGE("cert_svc_load_buf_to_context() failed. cert = [%s], err = [%d]", certval, err);
 			ret = RPM_INSTALLER_ERR_INTERNAL;
 			goto end;
 		}
@@ -1524,8 +1758,7 @@ int _ri_get_visibility_from_signature_file(const char *sigfile, int *visibility,
 		if (save_ca_path) {
 			err = __ri_create_cert_chain(SIG_DIST1, SIG_SIGNER, certval);
 			if (err) {
-				_LOGE("__ri_create_cert_chain() failed. sigtype = [%d]", (int)SIG_DIST1);
-				_SLOGE("__ri_create_cert_chain() failed. cert = [%s]", certval);
+				_LOGE("__ri_create_cert_chain() failed. sigtype = [%d], certval = [%s]", SIG_DIST1, certval);
 				__ri_free_cert_chain();
 				ret = RPM_INSTALLER_ERR_INTERNAL;
 				goto end;
@@ -1557,8 +1790,7 @@ int _ri_get_visibility_from_signature_file(const char *sigfile, int *visibility,
 		if (save_ca_path) {
 			err = __ri_create_cert_chain(SIG_DIST1, SIG_INTERMEDIATE, certval);
 			if (err) {
-				_LOGE("__ri_create_cert_chain() failed. sigtype = [%d]", (int)SIG_DIST1);
-				_SLOGE("__ri_create_cert_chain() failed. cert = [%s]", certval);
+				_LOGE("__ri_create_cert_chain() failed. sigtype = [%d], certval = [%s]", SIG_DIST1, certval);
 				__ri_free_cert_chain();
 				ret = RPM_INSTALLER_ERR_INTERNAL;
 				goto end;
@@ -1570,10 +1802,10 @@ int _ri_get_visibility_from_signature_file(const char *sigfile, int *visibility,
 		goto end;
 	}
 
-	err = cert_svc_verify_package_certificate(ctx, &validity, sigfile);
+	err = cert_svc_verify_certificate(ctx, &validity);
 
 	if (err != 0) {
-		_LOGE("cert_svc_verify_package_certificate() failed.");
+		_LOGE("cert_svc_verify_certificate() failed.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto end;
 	}
@@ -1637,7 +1869,7 @@ int _ri_verify_sig_and_cert(const char *sigfile, int *visibility, bool need_veri
 	else {
 		_LOGE("Unsupported signature type! [%s]", sigfile);
 		cert_svc_cert_context_final(ctx);
-		return RPM_INSTALLER_ERR_SIG_INVALID;
+		return RPM_INSTALLER_ERR_INTERNAL;
 	}
 
 	if (sigtype == SIG_DIST1 && ca_path != NULL && strlen(ca_path) != 0) {
@@ -1674,16 +1906,14 @@ int _ri_verify_sig_and_cert(const char *sigfile, int *visibility, bool need_veri
 
 		err = cert_svc_load_buf_to_context(ctx, (unsigned char *)certval);
 		if (err != 0) {
-			_LOGE("cert_svc_load_buf_to_context() failed. err = [%d]", err);
-			_SLOGE("cert_svc_load_buf_to_context() failed. cert = [%s]", certval);
+			_LOGE("cert_svc_load_buf_to_context() failed. cert = [%s], err = [%d]", certval, err);
 			ret = RPM_INSTALLER_ERR_CERT_INVALID;
 			goto end;
 		}
 
 		err = __ri_create_cert_chain(sigtype, SIG_SIGNER, certval);
 		if (err) {
-			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d]", sigtype);
-			_SLOGE("__ri_create_cert_chain() failed. cert = [%s]", certval);
+			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d], certval = [%s]", sigtype, certval);
 			__ri_free_cert_chain();
 			ret = RPM_INSTALLER_ERR_CERT_INVALID;
 			goto end;
@@ -1723,8 +1953,7 @@ int _ri_verify_sig_and_cert(const char *sigfile, int *visibility, bool need_veri
 
 		err = __ri_create_cert_chain(sigtype, SIG_INTERMEDIATE, certval);
 		if (err) {
-			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d]", sigtype);
-			_SLOGE("__ri_create_cert_chain() failed. cert = [%s]", certval);
+			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d], certval = [%s]", sigtype, certval);
 			__ri_free_cert_chain();
 			ret = RPM_INSTALLER_ERR_CERT_INVALID;
 			goto end;
@@ -1735,9 +1964,9 @@ int _ri_verify_sig_and_cert(const char *sigfile, int *visibility, bool need_veri
 		goto end;
 	}
 
-	err = cert_svc_verify_package_certificate(ctx, &validity, sigfile);
+	err = cert_svc_verify_certificate(ctx, &validity);
 	if (err != 0 && (need_verify == true)) {
-		_LOGE("cert_svc_verify_package_certificate() failed. err=[%d]", err);
+		_LOGE("cert_svc_verify_certificate() failed. err=[%d]", err);
 		ret = err;
 		goto end;
 	}
@@ -1752,7 +1981,7 @@ int _ri_verify_sig_and_cert(const char *sigfile, int *visibility, bool need_veri
 	err = cert_svc_get_visibility(ctx, visibility);
 	if (err != 0) {
 		_LOGE("cert_svc_get_visibility() failed. err = [%d]", err);
-		ret = RPM_INSTALLER_ERR_CERT_INVALID;
+		ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
 		goto end;
 	}
 	_LOGD("cert_svc_get_visibility() returns visibility=[%d]", *visibility);
@@ -1770,20 +1999,17 @@ verify_sig:
 	if (root_ca_path != NULL && strlen(root_ca_path) != 0) {
 		_LOGD("Root CA cert path=[%s]", root_ca_path);
 
-		if (need_verify == true) {
-			err = __ri_xmlsec_verify_signature(sigfile, root_ca_path);
-			if (err < 0) {
-				_LOGE("__ri_xmlsec_verify_signature(%s) failed.", sigfile);
-				ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
-				goto end;
-			}
+		err = __ri_xmlsec_verify_signature(sigfile, root_ca_path);
+		if (err < 0 && (need_verify == true)) {
+			_LOGE("__ri_xmlsec_verify_signature(%s) failed.", sigfile);
+			ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
+			goto end;
 		}
 
 		crt = __ri_get_cert_from_file(root_ca_path);
 		err = __ri_create_cert_chain(sigtype, SIG_ROOT, crt);
 		if (err) {
-			_LOGE("__ri_create_cert_chain() failed. sigtype = [%d]", sigtype);
-			_SLOGE("__ri_create_cert_chain() failed. cert = [%s]", crt);
+			_LOGE("__ri_create_cert_chain(%d) failed.", sigtype);
 			__ri_free_cert_chain();
 			ret = RPM_INSTALLER_ERR_CERT_INVALID;
 			goto end;
@@ -2020,6 +2246,243 @@ catch:
 	sqlite3_close(pkginfo_db);
 
 	return ret;
+}
+
+static int __ri_install_fota_for_rw(char *pkgid)
+{
+	int ret = 0;
+	int home_dir = 1;
+	char buff[BUF_SIZE] = { '\0' };
+	char *smack_label = NULL;
+	int visibility = 0;
+	char signature_file[BUF_SIZE] = {0, };
+
+	_LOGD("fota-info : pkgid[%s] start installation\n", pkgid);
+
+	/* unzip pkg path from factoryrest data */
+	snprintf(buff, BUF_SIZE, "opt/usr/apps/%s/*", pkgid); // relative path
+	const char *pkg_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
+	ret = _ri_xsystem(pkg_argv);
+	if (ret != 0) {
+		_LOGE("fota-info : unzip root path[%s] is fail .\n", buff);
+	} else {
+		_LOGE("fota-info : unzip root path[%s] is success\n", buff);
+	}
+
+	/* unzip manifest from factoryrest data */
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "opt/share/packages/%s.xml", pkgid); // relative path
+
+	const char *xml_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
+	ret = _ri_xsystem(xml_argv);
+	if (ret != 0) {
+		_LOGE("fota-info : xml_argv fail for pkgid[%s] .\n", pkgid);
+	} else {
+		_LOGE("fota-info : xml_argv[%s] is success\n", pkgid);
+	}
+
+	/* get updated manifest path */
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+	_LOGE("Manifest name is %s\n", buff);
+
+	/* apply smack for manifest */
+	ret = __get_smack_label_from_db(pkgid, &smack_label);
+	_LOGD("smack_label[%s], ret[%d]\n", smack_label, ret);
+
+	_ri_privilege_change_smack_label(buff, smack_label, 0);	/* 0 is SMACK_LABEL_ACCESS */
+
+	/* register manifest */
+	char *fota_tags[3] = { NULL, };
+	fota_tags[0] = "removable=true";
+	fota_tags[1] = "preload=true";
+	fota_tags[2] = NULL;
+
+	ret = pkgmgr_parser_parse_manifest_for_installation(buff, fota_tags);
+	if (ret < 0) {
+		_LOGE("Parsing Manifest Failed\n");
+		ret = -1;
+		goto err;
+	} else {
+		_LOGE("Parsing Manifest Success\n");
+	}
+
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
+	ret = _ri_verify_signatures(buff, pkgid, false);
+	if (ret == 0) {
+		_LOGE("fota-info : certificate register(%s).", pkgid);
+		_ri_register_cert(pkgid);
+	}
+
+	__ri_make_directory(pkgid);
+	ret = _coretpk_installer_apply_smack(pkgid, 0);
+	if (ret != 0) {
+		_LOGE("failed to apply the smack.");
+	}
+
+	snprintf(signature_file, BUF_SIZE, "%s/%s", buff, SIGNATURE1_XML);
+	if (access(signature_file, F_OK) != 0){
+		_LOGE("[%s] is not present", signature_file);
+	} else {
+		ret = _ri_get_visibility_from_signature_file(signature_file, &visibility, false);
+		if (ret != 0) {
+			_LOGE("Couldnt get visiblity [%d], ret: %d", visibility, ret);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto err;
+		} else {
+			_LOGE("visibility : %d", visibility);
+		}
+	}
+
+	ret = _ri_apply_privilege(pkgid, visibility, smack_label);
+	if (ret < 0) {
+		_LOGE("fota-info : _ri_apply_privilege fail[pkgid=%s]\n", pkgid);
+	} else {
+		_LOGE("fota-info : pkgid[%s] apply smack success\n", pkgid);
+	}
+
+err:
+	FREE_AND_NULL(smack_label);
+
+	return ret;
+}
+
+static int __ri_upgrade_fota_for_rw(char *pkgid)
+{
+	int ret = 0;
+	int home_dir = 1;
+	char buff[BUF_SIZE] = { '\0' };
+	int visibility = 0;
+	char signature_file[BUF_SIZE] = {0, };
+	char *smack_label = NULL;
+
+	_LOGD("fota-info : pkgid[%s] start upgrade\n", pkgid);
+
+	/* unzip pkg dir from factoryrest data */
+	snprintf(buff, BUF_SIZE, "opt/usr/apps/%s/*", pkgid); // relative path
+	const char *pkg_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
+	ret = _ri_xsystem(pkg_argv);
+	if (ret != 0) {
+		_LOGE("fota-info : unzip root path[%s] is fail .\n", buff);
+	} else {
+		_LOGD("fota-info : unzip root path[%s] is success\n", buff);
+	}
+
+	/* unzip manifest from factoryrest data */
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "opt/share/packages/%s.xml", pkgid); // relative path
+	const char *xml_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, buff, "-d", "/", NULL };
+	ret = _ri_xsystem(xml_argv);
+	if (ret != 0) {
+		_LOGE("fota-info : unzip manifest[%s] is fail .\n", buff);
+	} else {
+		_LOGD("fota-info : unzip manifest[%s] is success\n", buff);
+	}
+
+	/* get updated manifest path */
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+	_LOGE("Manifest name is %s\n", buff);
+
+	/* apply smack for manifest */
+	ret = __get_smack_label_from_db(pkgid, &smack_label);
+	_LOGD("smack_label[%s], ret[%d]\n", smack_label, ret);
+
+	_ri_privilege_change_smack_label(buff, smack_label, 0);	/* 0 is SMACK_LABEL_ACCESS */
+
+	/* register manifest */
+	ret = pkgmgr_parser_parse_manifest_for_upgrade(buff, NULL);
+	if (ret < 0) {
+		_LOGE("Parsing Manifest Failed\n");
+		ret = -1;
+		goto err;
+	} else {
+		_LOGD("Parsing Manifest Success\n");
+	}
+
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
+	ret = _ri_verify_signatures(buff, pkgid, false);
+	if (ret == 0) {
+		_LOGE("fota-info : certificate register(%s).", pkgid);
+		/* Register new cert info */
+		_ri_unregister_cert(pkgid);
+		_ri_register_cert(pkgid);
+	}
+
+	__ri_make_directory(pkgid);
+	ret = _coretpk_installer_apply_smack(pkgid, 0);
+	if (ret != 0) {
+		_LOGE("failed to apply the smack.");
+	}
+
+	snprintf(signature_file, BUF_SIZE, "%s/%s", buff, SIGNATURE1_XML);
+	if (access(signature_file, F_OK) != 0){
+		_LOGE("[%s] is not present", signature_file);
+	} else {
+		ret = _ri_get_visibility_from_signature_file(signature_file, &visibility, false);
+		if (ret != 0) {
+			_LOGE("Couldnt get visiblity [%d], ret: %d", visibility, ret);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto err;
+		} else {
+			_LOGE("visibility : %d", visibility);
+		}
+	}
+
+	ret = _ri_apply_privilege(pkgid, visibility, smack_label);
+	if (ret < 0) {
+		_LOGE("fota-info : _ri_apply_privilege fail[pkgid=%s]\n", pkgid);
+	} else {
+		_LOGE("fota-info : pkgid[%s] apply smack success\n", pkgid);
+	}
+
+err:
+	FREE_AND_NULL(smack_label);
+
+	return ret;
+}
+
+static int __ri_uninstall_fota_for_rw(char *pkgid)
+{
+	int ret = 0;
+	char buff[BUF_SIZE] = { '\0' };
+	char *smack_label = NULL;
+
+	_LOGD("fota-info : pkgid[%s] start uninstall\n", pkgid);
+
+	ret = __get_smack_label_from_db(pkgid, &smack_label);
+	_LOGD("smack_label[%s], ret[%d]\n", smack_label, ret);
+
+	/* del root path dir */
+	snprintf(buff, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
+
+	if (__is_dir(buff)) {
+		_installer_util_delete_dir(buff);
+	}
+
+	/* del manifest */
+	memset(buff, '\0', BUF_SIZE);
+	snprintf(buff, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+	(void)remove(buff);
+
+	/* del db info */
+	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
+	if (ret < 0) {
+		_LOGE("Parsing Manifest Failed\n");
+	}
+
+	/* execute privilege APIs */
+	_ri_privilege_revoke_permissions(smack_label);
+	_ri_privilege_unregister_package(smack_label);
+
+	/* Unregister cert info */
+	_ri_unregister_cert(pkgid);
+
+	FREE_AND_NULL(smack_label);
+
+	return 0;
 }
 
 /**
@@ -3541,6 +4004,177 @@ end:
 		free(op_str);
 	if (remove_str)
 		free(remove_str);
+
+	return ret;
+}
+
+int _rpm_process_csc_coretpk(const char *csc_script)
+{
+	int ret = 0;
+	int op_type = 0;
+
+	char *path_str = NULL;
+	char *op_str = NULL;
+	char *remove_str = NULL;
+	char csc_str[BUF_SIZE] = { '\0' };
+	snprintf(csc_str, BUF_SIZE - 1, "%s:", csc_script);
+
+	/* get params from csc script */
+	path_str = _installer_util_get_str(csc_str, TOKEN_PATH_STR);
+	op_str = _installer_util_get_str(csc_str, TOKEN_OPERATION_STR);
+	remove_str = _installer_util_get_str(csc_str, TOKEN_REMOVE_STR);
+	if ((path_str == NULL) || (op_str == NULL) || (remove_str == NULL)) {
+		_LOGE("csc-info : input param is null[%s, %s, %s]\n", path_str, op_str, remove_str);
+		goto end;
+	}
+	_LOGD("csc-info : path=%s, op=%s, remove=%s\n", path_str, op_str, remove_str);
+
+	/* get operation type */
+	op_type = __ri_get_op_type(op_str);
+	if (op_type < 0) {
+		_LOGE("csc-info : operation error[%s, %s]\n", path_str, op_str);
+		goto end;
+	}
+
+	switch (op_type) {
+	case INSTALL_REQ:
+		ret = _coretpk_installer_csc_install(path_str, remove_str, csc_script);
+		break;
+
+	case UPGRADE_REQ:
+		ret = _coretpk_installer_csc_upgrade(path_str, remove_str, csc_script);
+		break;
+
+	case UNINSTALL_REQ:
+		ret = _coretpk_installer_csc_uninstall(path_str);
+		break;
+
+	default:
+		break;
+	}
+
+	if (ret < 0)
+		_LOGE("csc-info : csc fail [pkgid=%s, operation=%d]\n", path_str, op_type);
+
+end:
+	if (path_str)
+		free(path_str);
+	if (op_str)
+		free(op_str);
+	if (remove_str)
+		free(remove_str);
+
+	return ret;
+}
+
+int _rpm_process_fota(char *fota_script)
+{
+	int ret = 0;
+	int op_type = 0;
+	char *pkgid = NULL;
+	char *op_str = NULL;
+
+	char csc_str[BUF_SIZE] = { '\0' };
+	snprintf(csc_str, BUF_SIZE - 1, "%s:", fota_script);
+
+	/* get params from fota script */
+	pkgid = _installer_util_get_str(csc_str, TOKEN_PATH_STR);
+	op_str = _installer_util_get_str(csc_str, TOKEN_OPERATION_STR);
+	if ((pkgid == NULL) || (op_str == NULL)) {
+		_LOGE("fota-info : input param is null[%s, %s]\n", pkgid, op_str);
+		goto end;
+	}
+	_LOGD("fota-info : path=%s, op=%s\n", pkgid, op_str);
+
+	/* get operation type */
+	op_type = __ri_get_op_type(op_str);
+	if (op_type < 0) {
+		_LOGE("fota-info : operation error[%s, %s]\n", pkgid, op_str);
+		goto end;
+	}
+
+	switch (op_type) {
+	case INSTALL_REQ:
+		ret = __ri_install_fota(pkgid);
+		break;
+
+	case UPGRADE_REQ:
+		ret = __ri_upgrade_fota(pkgid);
+		break;
+
+	case UNINSTALL_REQ:
+		ret = __ri_uninstall_fota(pkgid);
+		break;
+
+	default:
+		break;
+	}
+
+	if (ret < 0)
+		_LOGE("fota-info : Fota fail [pkgid=%s, operation=%d]\n", pkgid, op_type);
+
+end:
+	if (pkgid)
+		free(pkgid);
+	if (op_str)
+		free(op_str);
+
+	return ret;
+}
+
+int _rpm_process_fota_for_rw(char *fota_script)
+{
+	int ret = 0;
+	int op_type = 0;
+	char *pkgid = NULL;
+	char *op_str = NULL;
+
+	char fota_str[BUF_SIZE] = { '\0' };
+	snprintf(fota_str, BUF_SIZE - 1, "%s:", fota_script);
+
+	/* get params from fota script */
+	pkgid = _installer_util_get_str(fota_str, TOKEN_PATH_STR);
+	op_str = _installer_util_get_str(fota_str, TOKEN_OPERATION_STR);
+	if ((pkgid == NULL) || (op_str == NULL)) {
+		_LOGE("fota-info : input param is null[%s, %s]\n", pkgid, op_str);
+		goto end;
+	}
+	_LOGD("fota-info : path=%s, op=%s\n", pkgid, op_str);
+
+	/* get operation type */
+	op_type = __ri_get_op_type(op_str);
+	if (op_type < 0) {
+		_LOGE("fota-info : operation error[%s, %s]\n", pkgid, op_str);
+		goto end;
+	}
+
+	switch (op_type) {
+	case INSTALL_REQ:
+		ret = __ri_install_fota_for_rw(pkgid);
+		break;
+
+	case UPGRADE_REQ:
+		ret = __ri_upgrade_fota_for_rw(pkgid);
+		break;
+
+	case UNINSTALL_REQ:
+		ret = __ri_uninstall_fota_for_rw(pkgid);
+		break;
+
+	default:
+		break;
+	}
+
+	if (ret < 0)
+		_LOGE("fota-info : Fota fail [pkgid=%s, operation=%d]\n", pkgid, op_type);
+
+end:
+	if (pkgid)
+		free(pkgid);
+	if (op_str)
+		free(op_str);
+
+	sync();
 
 	return ret;
 }

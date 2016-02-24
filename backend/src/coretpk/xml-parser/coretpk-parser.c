@@ -505,36 +505,6 @@ static int __coretpk_parser_remove_onboot_autorestart(xmlDocPtr doc)
 	return 0;
 }
 
-static int __coretpk_parser_remove_mouse_event(xmlDocPtr doc)
-{
-	int ret;
-
-	retv_if(doc == NULL, RPM_INSTALLER_ERR_WRONG_PARAM);
-
-	ret = __coretpk_parser_remove_attribute(doc, (xmlChar *) "//*[name() = 'widget']/*[name() = 'box']/*[name() = 'size']/@mouse_event");
-	if (ret == -1) {
-		_LOGE("failed to remove mouse_event attribute");
-		return -1;
-	}
-
-	return 0;
-}
-
-static int __coretpk_parser_remove_support_mode(xmlDocPtr doc)
-{
-	int ret;
-
-	retv_if(doc == NULL, RPM_INSTALLER_ERR_WRONG_PARAM);
-
-	ret = __coretpk_parser_remove_attribute(doc, (xmlChar *) "//@support-mode");
-	if (ret == -1) {
-		_LOGE("failed to remove support-mode attribute");
-		return -1;
-	}
-
-	return 0;
-}
-
 static int __coretpk_parser_check_api_version(char *api_version, unsigned int required_major, unsigned int required_minor, unsigned int required_micro, int *result)
 {
 	char *api_version_dup;
@@ -669,15 +639,12 @@ int _coretpk_parser_convert_manifest(const char *tizen_manifest, const char *pkg
 	__coretpk_parser_get_value(context, "//*[name() ='manifest']", "api-version", api_version, sizeof(api_version));
 	__coretpk_parser_check_api_version(api_version, 2, 4, 0, &result);
 
-	if (!((api_visibility & CERT_SVC_VISIBILITY_PARTNER) ||
-		(api_visibility & CERT_SVC_VISIBILITY_PARTNER_OPERATOR) ||
-		(api_visibility & CERT_SVC_VISIBILITY_PARTNER_MANUFACTURER) ||
-		(api_visibility & CERT_SVC_VISIBILITY_PLATFORM))) {
-		if (result == 0 || result == -1) {
+	if (result == 0 || result == -1) {
+		if (!((api_visibility & CERT_SVC_VISIBILITY_PARTNER) ||
+			(api_visibility & CERT_SVC_VISIBILITY_PARTNER_OPERATOR) ||
+			(api_visibility & CERT_SVC_VISIBILITY_PARTNER_MANUFACTURER) ||
+			(api_visibility & CERT_SVC_VISIBILITY_PLATFORM)))
 			__coretpk_parser_remove_onboot_autorestart(doc);
-			__coretpk_parser_remove_mouse_event(doc);
-		}
-		__coretpk_parser_remove_support_mode(doc);
 	}
 #endif
 
@@ -1234,10 +1201,8 @@ int _coretpk_mount_install_parser_convert_manifest(const char *tizen_manifest, c
 		if (!((api_visibility & CERT_SVC_VISIBILITY_PARTNER) ||
 			(api_visibility & CERT_SVC_VISIBILITY_PARTNER_OPERATOR) ||
 			(api_visibility & CERT_SVC_VISIBILITY_PARTNER_MANUFACTURER) ||
-			(api_visibility & CERT_SVC_VISIBILITY_PLATFORM))) {
+			(api_visibility & CERT_SVC_VISIBILITY_PLATFORM)))
 			__coretpk_parser_remove_onboot_autorestart(doc);
-			__coretpk_parser_remove_mouse_event(doc);
-		}
 	}
 
 	(void)remove(system_manifest);

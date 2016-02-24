@@ -47,7 +47,6 @@ int _installer_util_get_configuration_value(const char *value);
 char *_installer_util_get_str(const char *str, const char *pKey);
 int _installer_util_extract_version(const char* version, int* major, int* minor, int* macro);
 int _installer_util_compare_version(const char* old_version, const char* new_version);
-int _installer_util_mkpath(const char *s, mode_t mode);
 
 #ifdef _APPFW_FEATURE_DELTA_UPDATE
 int _installer_util_create_dir(const char *dir_path, mode_t mode);

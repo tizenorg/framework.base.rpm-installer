@@ -30,7 +30,6 @@
 #include <glib.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
-#include <openssl/md5.h>
 #include <vconf.h>
 #include <unzip.h>
 #include <sys/smack.h>
@@ -670,6 +669,35 @@ catch:
 	return csc_package;
 }
 
+void __make_csc_flag(const char *pkg_id)
+{
+	int ret = 0;
+	FILE *file = NULL;
+	char flag_path[BUF_SIZE] = { 0, };
+
+	if (access(CSC_FLAG, F_OK) != 0) {
+		ret = mkdir(CSC_FLAG, DIRECTORY_PERMISSION_755);
+		if (ret < 0) {
+			_LOGE("mkdir(%s) failed. [%d][%s]", CSC_FLAG, errno, strerror(errno));
+		}
+	}
+
+	snprintf(flag_path, BUF_SIZE, "%s/%s", CSC_FLAG, pkg_id);
+	_LOGD("flag_path=[%s]", flag_path);
+
+	file = fopen(flag_path, "w");
+	tryvm_if(file == NULL, ret = -1, "fopen(%s) failed. [%d][%s]", flag_path, errno, strerror(errno));
+
+	_LOGD("csc flag[%s] is created.", pkg_id);
+
+ catch:
+	if (file) {
+		fclose(file);
+	}
+
+	return;
+}
+
 int __remove_updates_csc_package(const char *pkgid, const char *csc_path)
 {
 	retvm_if(pkgid == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "pkgid is NULL.");
@@ -680,8 +708,8 @@ int __remove_updates_csc_package(const char *pkgid, const char *csc_path)
 
 	_LOGD("remove update for csc. path_str=[%s], remove_str=[%s]", path_str, remove_str);
 
-	__coretpk_installer_csc_uninstall(pkgid);
-	__coretpk_installer_csc_install(path_str, remove_str, csc_path);
+	_coretpk_installer_csc_uninstall(pkgid);
+	_coretpk_installer_csc_install(path_str, remove_str, csc_path);
 
 	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "start", "update");
 
@@ -719,7 +747,7 @@ static int __pkg_remove_update(const char *pkgid)
 	}
 
 	/* start */
-	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "start", "uninstall");
+	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "start", "update");
 
 	/* terminate running app */
 	__terminate_running_app(pkgid);
@@ -732,9 +760,6 @@ static int __pkg_remove_update(const char *pkgid)
 
 	/* Remove origin rule */
 	_ri_privilege_unregister_package(pkgid);
-
-	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "end", "ok");
-	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "start", "install");
 
 	/* unzip pkg path from factory-reset data */
 	memset(rootpath, '\0', BUF_SIZE);
@@ -972,88 +997,6 @@ end:
 	return ret;
 }
 
-void __make_csc_flag(const char *pkg_id)
-{
-	int ret = 0;
-	FILE *file = NULL;
-	char flag_path[BUF_SIZE] = { 0, };
-
-	if (access(CSC_FLAG, F_OK) != 0) {
-		ret = mkdir(CSC_FLAG, DIRECTORY_PERMISSION_755);
-		if (ret < 0) {
-			_LOGE("mkdir(%s) failed. [%d][%s]", CSC_FLAG, errno, strerror(errno));
-		}
-	}
-
-	snprintf(flag_path, BUF_SIZE, "%s/%s", CSC_FLAG, pkg_id);
-	_LOGD("flag_path=[%s]", flag_path);
-
-	file = fopen(flag_path, "w");
-	tryvm_if(file == NULL, ret = -1, "fopen(%s) failed. [%d][%s]", flag_path, errno, strerror(errno));
-
-	_LOGD("csc flag[%s] is created.", pkg_id);
-
- catch:
-	if (file) {
-		fclose(file);
-	}
-
-	return;
-}
-
-static int __compare_checksum(const char *chksum, const char *pkgfile)
-{
-	retvm_if(pkgfile == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "filepath is NULL.");
-	retvm_if(strlen(chksum) == 0, RPM_INSTALLER_ERR_WRONG_PARAM, "cert value is empty.");
-
-	MD5_CTX mdContext;
-	FILE *fp = NULL;
-	unsigned char data[1024] = {0, };
-	unsigned char md5_value[MD5_DIGEST_LENGTH] = {0, };
-	char *hash = NULL;
-	char temp[3] = { '\0', };
-	int bytes = 0;
-	int ret = -1;
-	int i;
-
-	fp = fopen(pkgfile, "r");
-	if (fp == NULL) {
-		printf("failed to open [%s]", pkgfile);
-		return -1;
-	}
-
-	MD5_Init(&mdContext);
-	while((bytes = fread(data, 1, 1024, fp)) != 0)
-		MD5_Update(&mdContext, data, bytes);
-	MD5_Final(md5_value, &mdContext);
-
-	hash = (char *)malloc(MD5_DIGEST_LENGTH * 2 + 1);
-	if (hash == NULL) {
-		_LOGE("failed to allocate memory");
-		ret = -1;
-		goto err;
-	}
-	memset(hash, '\0', MD5_DIGEST_LENGTH * 2 + 1);
-
-	for(i = 0; i < MD5_DIGEST_LENGTH; i++) {
-		snprintf(temp, 3, "%02x", md5_value[i]);
-		strncat(hash, temp, strlen(temp));
-	}
-
-	if (strcmp(chksum, hash) != 0) {
-		_LOGE("checksum verification failed [%s], [%s]", chksum, hash);
-		ret = -1;
-	} else
-		ret = 0;
-
-err:
-
-	fclose(fp);
-	FREE_AND_NULL(hash);
-
-	return ret;
-}
-
 int _coretpk_installer_remove_db_info(const char *pkgid)
 {
 	int ret = 0;
@@ -1194,9 +1137,6 @@ int _coretpk_backend_interface(const char *reqcommand, const ri_frontend_cmdline
 		_LOGE("reqcommand or data is NULL.");
 		return -1;
 	}
-
-	cmdinfo info;
-
 #ifdef _APPFW_FEATURE_EXPANSION_PKG_INSTALL
 	/* '.tep' also gets installed after tpk installation,
 	   so to manage progress percentage, 'is_tpk_and_tep' is used */
@@ -1212,13 +1152,7 @@ int _coretpk_backend_interface(const char *reqcommand, const ri_frontend_cmdline
 			return _coretpk_installer_prepare_package_install_with_debug(data->pkgid, data->clientid, false, NULL);
 		else
 #endif
-		if (data->pkg_chksum != NULL)
-			strncpy(info.pkg_chksum, data->pkg_chksum, BUF_SIZE - 1);
-		else
-			memset(info.pkg_chksum, '\0', BUF_SIZE);
-
-		info.support_disable = false;
-		return _coretpk_installer_prepare_package_install(data->pkgid, data->clientid, false, &info);
+			return _coretpk_installer_prepare_package_install(data->pkgid, data->clientid, false, NULL);
 	} else if (strncmp(reqcommand, CORETPK_UNINSTALL, strlen(CORETPK_UNINSTALL)) == 0) {
 		return _coretpk_installer_prepare_package_uninstall(data->pkgid);
 	} else if (strncmp(reqcommand, CORETPK_DIRECTORY_INSTALL, strlen(CORETPK_DIRECTORY_INSTALL)) == 0) {
@@ -1349,14 +1283,13 @@ pkginfo *_coretpk_installer_get_pkgfile_info(const char *pkgfile, int cmd)
 			}
 			goto err;
 		}
+		_LOGD("TEMP_DIR=[%s]", TEMP_DIR);
 
 		/* extract all the xml files */
 		const char *unzip_argv[] = { "/usr/bin/unzip", "-oqq", pkgfile, xmls, "-d", TEMP_DIR, NULL };
 		ret = _ri_xsystem(unzip_argv);
 		if (ret != 0) {
-			if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-				_LOGE("unzip (%s) failed. [%d][%s]", TEMP_DIR, errno, buf);
-			}
+			_LOGE("cannot find xml files in the package.");
 			goto err;
 		}
 
@@ -1370,6 +1303,7 @@ pkginfo *_coretpk_installer_get_pkgfile_info(const char *pkgfile, int cmd)
 		ret = RPM_INSTALLER_ERR_NO_MANIFEST;
 		goto err;
 	}
+	_LOGD("manifest=[%s]", tizen_manifest);
 
 	info = _coretpk_parser_get_manifest_info(tizen_manifest);
 	if (info == NULL) {
@@ -2794,14 +2728,6 @@ int _coretpk_installer_install_package(const char *pkgfile, const pkginfo * pkg_
 		}
 	}
 
-	if (strlen(pkg_file_info->pkg_chksum) != 0) {
-		if (__compare_checksum(pkg_file_info->pkg_chksum, pkgfile) != 0) {
-			_LOGE("failed to compare checksum of pkg");
-			ret = RPM_INSTALLER_ERR_PACKAGE_INVALID;
-			goto err;
-		}
-	}
-
 	if (__is_dir(pkgfile)) {
 		_LOGD("Directory install(preload)");
 		directory_install = true;
@@ -3214,8 +3140,6 @@ int _coretpk_installer_prepare_package_install(const char *pkg_file, const char 
 	pkg_file_info->is_preload = preload;
 	if (cmd_info) {
 		pkg_file_info->support_disable = cmd_info->support_disable;
-		if (strlen(cmd_info->pkg_chksum) != 0)
-			strncpy(pkg_file_info->pkg_chksum, cmd_info->pkg_chksum, BUF_SIZE - 1);
 	}
 
 	ret = _coretpk_installer_install_package(pkg_file, pkg_file_info);
@@ -3329,7 +3253,7 @@ int _coretpk_installer_prepare_preload_install(const char *dirpath, const char *
 }
 
 #ifdef _APPFW_FEATURE_MOUNT_INSTALL
-int _coretpk_installer_mount_install_create_symbolic_links(const char *pkgfile, const char *pkgid, const char* orig_dir)
+int _coretpk_installer_mount_install_create_symbolic_links(const char *pkgfile, const char *pkgid)
 {
 	int ret = PMINFO_R_OK;
 	size_t filename_len;
@@ -3367,12 +3291,12 @@ int _coretpk_installer_mount_install_create_symbolic_links(const char *pkgfile, 
 				}
 
 				filename_len = strlen(filename);
-				_LOGE("Filename: [%s], len:[%d]", filename, filename_len);
+				_LOGE("\n\nFilename: [%s], len:[%d]", filename, filename_len);
 
 				/* If it is 1st level directory (like opt/not internal like opt/usr/) or just a file then create symbolic links */
 				if( (((strchr(filename, '/') -filename) == filename_len -1) || (strchr(filename, '/') == NULL)) && strstr(filename, "bin/") == NULL) {
 
-					_LOGE("Creating symlink Filename: [%s]", filename);
+					_LOGE("Creating symlink Filename: [%s]\n\n", filename);
 
 					if(((strchr(filename, '/') -filename) == filename_len -1)){
 						filename[filename_len -1] = '\0';
@@ -3382,28 +3306,27 @@ int _coretpk_installer_mount_install_create_symbolic_links(const char *pkgfile, 
 					slink_from = strdup(tmp);
 
 					memset(tmp, '\0', BUF_SIZE);
-					snprintf(tmp, BUF_SIZE, "%s/%s/%s/%s", OPT_USR_APPS, pkgid, orig_dir, filename);
+					snprintf(tmp, BUF_SIZE, "%s/%s/.pkg/%s", OPT_USR_APPS, pkgid, filename);
 					slink_to = strdup(tmp);
 
 					if ((ret = symlink(slink_to, slink_from)) < 0) {
 						if (errno == EEXIST) {
-							_LOGE("File with Symlink name present %s", slink_from);
-							unlink(slink_from);
-							ret = symlink(slink_to, slink_from);
-							if(ret < 0)
-								_LOGE("Symbolic link creation failed, error is [%s]", strerror(errno));
-							_LOGE("Created symlink Filename: [%s]", filename);
+							_LOGE("File with Symlink name present %s\n", slink_from);
 						} else {
 							char buf[BUF_SIZE] = { 0, };
 							if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-								_LOGE("Symbolic link creation failed, error is [%s]", buf);
+								_LOGE("Symbolic link creation failed, error is [%s]\n", buf);
 							}
 							goto catch;
 						}
 					}
+
 					FREE_AND_NULL(slink_from);
 					FREE_AND_NULL(slink_to);
+
 				}
+
+
 				FREE_AND_NULL(filename);
 			} while (unzGoToNextFile(uzf) == UNZ_OK);
 		}
@@ -3425,24 +3348,27 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 
 	int ret = 0;
 	int visibility = 0;
+	int install_status = APP2EXT_STATUS_SUCCESS;
 	char root_path[BUF_SIZE] = { 0, };
 	char tizen_manifest[BUF_SIZE] = { 0, };
 	char system_manifest[BUF_SIZE] = { 0, };
 	char cwd[BUF_SIZE] = { 0, };
 	char rwmanifest[BUF_SIZE] = { 0, };
+	char res_xml[BUF_SIZE] = { 0, };
 	char signature1[BUF_SIZE] = { 0, };
 	char *temp = NULL;
 	const char *pkgid = pkg_file_info->package_name;
 	bool update = false;
 	bool directory_install = false;
 	pkgmgrinfo_pkginfo_h pkginfo_handle = NULL;
+	pkgmgrinfo_installed_storage storage = PMINFO_INTERNAL_STORAGE;
+	app2ext_handle *handle = NULL;
 	bundle *optional_data = NULL;
+
 	char *mnt_path[2] = {NULL, };
 	char tpk_path[BUF_SIZE] = {0, };
 	char buf[BUF_SIZE] = { 0, };
-	char *filename = NULL;
-	bool is_MIC_env = false;
-	char tmp_dir[BUF_SIZE] = { 0, };
+
 
 	optional_data = bundle_create();
 	if (optional_data) {
@@ -3456,16 +3382,8 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 		directory_install = true;
 	}
 
-	if(access(MIC_ENV, F_OK) != 0) {
-		is_MIC_env = true;
-		snprintf(tmp_dir, BUF_SIZE, "%s/%s/.tmp/", OPT_USR_APPS, pkgid);
-	}
-
 	snprintf(root_path, BUF_SIZE, "%s/%s/", OPT_USR_APPS, pkgid);
 	snprintf(tizen_manifest, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, CORETPK_XML);
-
-	filename = strrchr(pkgfile, '/');
-	filename++;
 
 	ret = pkgmgrinfo_pkginfo_get_pkginfo(pkgid, &pkginfo_handle);
 	if (ret < 0) {
@@ -3474,10 +3392,6 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 		_LOGD("------------------------------------------");
 
 		_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "start", "install");
-
-		if(access(root_path, F_OK) == 0) {
-			_installer_util_delete_dir(root_path);
-		}
 
 	} else {
 		_LOGD("------------------------------------------");
@@ -3490,9 +3404,16 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 		/* terminate running app */
 		__terminate_running_app(pkgid);
 
+		ret = pkgmgrinfo_pkginfo_get_installed_storage(pkginfo_handle, &storage);
+		if (ret != 0) {
+			_LOGE("pkgmgrinfo_pkginfo_get_installed_storage(%s) failed.", pkgid);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto err;
+		}
+
 		/* remove dir for clean */
 		if (directory_install == false) {
-			__ri_remove_updated_dir(pkgid);
+			_installer_util_delete_dir(root_path);
 		}
 	}
 
@@ -3503,6 +3424,23 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 #endif
 		_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "install_percent", "30");
 
+#if 0
+	/* install package */
+	if (directory_install == false) {
+		_LOGD("[start] unzip(%s)", pkgfile);
+		const char *unzip_argv[] = { "/usr/bin/unzip", "-o", pkgfile, "-d", root_path, NULL };
+		ret = _ri_xsystem(unzip_argv);
+		if (ret != 0) {
+			_LOGE("failed to unzip for path=[%s], ret=[%d]", root_path, ret);
+			ret = RPM_INSTALLER_ERR_UNZIP_FAILED;
+			goto err;
+		}
+		_LOGD("[end] unzip(%s)", root_path);
+	}
+#else
+	if(access(root_path, F_OK) == 0){
+		_installer_util_delete_dir(root_path);
+	}
 
 	ret = _installer_util_mkpath(root_path, DIRECTORY_PERMISSION_755);
 	if(ret){
@@ -3533,54 +3471,37 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 	}
 	_LOGD("[end] unzip(%s/bin)", tpk_path);
 
-	if(!is_MIC_env){
-		snprintf(tpk_path, BUF_SIZE, "%s/%s/.pkg", OPT_USR_APPS, pkgid);
-		_LOGE("tpk mount path: [%s]",tpk_path);
-		mnt_path[0] = strdup(tpk_path);
-		memset(tpk_path, 0, BUF_SIZE);
+	snprintf(tpk_path, BUF_SIZE, "%s/%s/.pkg", OPT_USR_APPS, pkgid);
+	_LOGE("tpk mount path: [%s]",tpk_path);
+	mnt_path[0] = strdup(tpk_path);
+	memset(tpk_path, 0, BUF_SIZE);
 
-		snprintf(tpk_path, BUF_SIZE, "%s/%s", USR_PACKAGES, filename);
-		_LOGE("tpk filename: [%s]",tpk_path);
-		mnt_path[1] = strdup(tpk_path);
+	char *filename = strrchr(pkgfile, '/');
+	filename++;
+	snprintf(tpk_path, BUF_SIZE, "%s/%s", USR_PACKAGES, filename);
+	_LOGE("tpk filename: [%s]",tpk_path);
+	mnt_path[1] = strdup(tpk_path);
 
-		ret = _coretpk_dbus_is_mount_done(mnt_path[0]);
-		if(ret != 1) {
-			ret = _coretpk_dbus_mount_file(mnt_path, pkgid);
-			if(ret){
-				if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-					_LOGE("DBUS Error: err: [%s]", buf);
-				}
-				goto err;
+	ret = _coretpk_dbus_is_mount_done(mnt_path[0]);
+	if(ret != 1) {
+		ret = _coretpk_dbus_mount_file(mnt_path, pkgid);
+		if(ret){
+			if( strerror_r(errno, buf, sizeof(buf)) == 0) {
+				_LOGE("DBUS Error: err: [%s]", buf);
 			}
-			ret = _coretpk_dbus_wait_for_tep_mount(mnt_path[0]);
-			if(ret != 0){
-				ret = RPM_INSTALLER_ERR_INTERNAL;
-				_LOGE("Unable to mount the tpk file");
-				goto err;
-			}
+			goto err;
 		}
-		_coretpk_installer_mount_install_create_symbolic_links(pkgfile, pkgid, ".pkg");
-
-	}else {
-		/* Extract tpk to /opt/usr/apps/.tmp/ */
-		if (directory_install == false) {
-			ret = _installer_util_mkpath(tmp_dir, DIRECTORY_PERMISSION_755);
-			if(ret){
-				_LOGE("unable to create dir, [%s], error: [%s]", tmp_dir, strerror(errno));
-			}
-
-			_LOGD("[start] unzip(%s) to (%s)", pkgfile, tmp_dir);
-			const char *unzip_argv[] = { "/usr/bin/unzip", "-o", pkgfile, "-d", tmp_dir, NULL };
-			ret = _ri_xsystem(unzip_argv);
-			if (ret != 0) {
-				_LOGE("failed to unzip for path=[%s], ret=[%d]", tmp_dir, ret);
-				ret = RPM_INSTALLER_ERR_UNZIP_FAILED;
-				goto err;
-			}
-			_LOGD("[end] unzip(%s)", tmp_dir);
-			_coretpk_installer_mount_install_create_symbolic_links(pkgfile, pkgid, ".tmp");
+		ret = _coretpk_dbus_wait_for_tep_mount(mnt_path[0]);
+		if(ret != 0){
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			_LOGE("Unable to mount the tpk file");
+			goto err;
 		}
 	}
+
+	_coretpk_installer_mount_install_create_symbolic_links(pkgfile, pkgid);
+
+#endif
 
 	/* getcwd */
 	temp = getcwd(cwd, BUF_SIZE);
@@ -3700,15 +3621,14 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 	}
 	_LOGD("manifest parsing done successfully.");
 
-	_LOGE("###: pkgmgr_parser_insert_mount_install_info START");
-
+	filename = strrchr(pkgfile, '/');
+	filename++;
 	ret = pkgmgr_parser_insert_mount_install_info(pkgid, true, filename);
 	if (ret < 0) {
 		_LOGE("pkgmgr_parser_insert_mount_install_info(%s) failed.", pkgfile);
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto err;
 	}
-	_LOGE("###: pkgmgr_parser_insert_mount_install_info END");
 
 
 	/* search_ug_app */
@@ -3724,6 +3644,22 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 #endif
 		_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "install_percent", "60");
 
+#if 0
+	/* make directory */
+	ret = _coretpk_installer_make_directory(pkgid, pkg_file_info->is_preload);
+	if (ret != 0) {
+		_LOGE("failed to make the directory.");
+		goto err;
+	}
+
+	/* apply smack to app dir */
+	ret = _coretpk_installer_apply_smack(pkgid, 1);
+	if (ret != 0) {
+		_LOGE("failed to apply the smack.");
+		goto err;
+	}
+#else
+
 	/* make directory */
 	ret = _coretpk_installer_mount_install_make_directory(pkgid, pkg_file_info->is_preload);
 	if (ret != 0) {
@@ -3737,6 +3673,8 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 		_LOGE("failed to apply the smack.");
 		goto err;
 	}
+
+#endif
 
 	/* apply privilege for widget */
 	if (pkg_file_info->is_widget == true) {
@@ -3767,17 +3705,13 @@ int _coretpk_installer_mount_install_package(const char *pkgfile, const pkginfo 
 
 err: ;
 
-	if(is_MIC_env) {
-		_installer_util_delete_dir(tmp_dir);
-		_coretpk_installer_mount_install_create_symbolic_links(pkgfile, pkgid, ".pkg");
-	}else {
-		int res = _coretpk_dbus_unmount_file(mnt_path[0]);
-		if(res){
-			_LOGE("TPK Unmount Error");
-		}
-		FREE_AND_NULL(mnt_path[0]);
-		FREE_AND_NULL(mnt_path[1]);
+	int res = _coretpk_dbus_unmount_file(mnt_path[0]);
+	if(res){
+		_LOGE("TPK Unmount Error");
 	}
+	sleep(2);
+	FREE_AND_NULL(mnt_path[0]);
+	FREE_AND_NULL(mnt_path[1]);
 
 	if (optional_data) {
 		bundle_free(optional_data);
@@ -3838,30 +3772,17 @@ int _coretpk_installer_prepare_mount_install(const char *pkg_file, const char *c
 	pkginfo *pkg_file_info = NULL;
 
 	char dest_tpk_path[BUF_SIZE] = {'\0'};
-	char abs_path[PATH_MAX+1] = {'\0'};
-	char *ptr = NULL;
-	char buf[BUF_SIZE] = {'\0'};
-
-	ptr = realpath(pkg_file, abs_path);
-	if(!ptr) {
-		if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-			_LOGE("realpath() failed [%d][%s]", errno, buf);
-		}
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		goto catch;
-	}
 
 	/* Copy ".tpk" file to /opt/usr/share/packages/xxx.tpk */
-	char *filename = strrchr(abs_path, '/');
+	char *filename = strrchr(pkg_file, '/');
 	filename++;
-
 	snprintf(dest_tpk_path, PKG_MAX_LEN, "%s/%s", USR_PACKAGES,filename);
-	if(strcmp(abs_path, dest_tpk_path) != 0){
-		ret = _installer_util_copy_file(abs_path, dest_tpk_path);
+	if(strcmp(pkg_file, dest_tpk_path) != 0){
+		ret = _installer_util_copy_file(pkg_file, dest_tpk_path);
 	}
 
-	pkg_file_info = _coretpk_installer_get_pkgfile_info(abs_path, CORETPK_INSTALL_CMD);
-	tryvm_if(pkg_file_info == NULL, ret = RPM_INSTALLER_ERR_PACKAGE_INVALID, "_coretpk_installer_get_pkgfile_info(%s) failed.", abs_path);
+	pkg_file_info = _coretpk_installer_get_pkgfile_info(pkg_file, CORETPK_INSTALL_CMD);
+	tryvm_if(pkg_file_info == NULL, ret = RPM_INSTALLER_ERR_PACKAGE_INVALID, "_coretpk_installer_get_pkgfile_info(%s) failed.", pkg_file);
 	tryvm_if(strlen(pkg_file_info->package_name) == 0, ret = RPM_INSTALLER_ERR_PACKAGE_INVALID, "package_name is invalid. (len=0)");
 
 	if (client_id) {
@@ -3873,11 +3794,11 @@ int _coretpk_installer_prepare_mount_install(const char *pkg_file, const char *c
 		pkg_file_info->support_disable = cmd_info->support_disable;
 	}
 
-	ret = _coretpk_installer_mount_install_package(abs_path, pkg_file_info);
+	ret = _coretpk_installer_mount_install_package(pkg_file, pkg_file_info);
 	if (ret != 0) {
-		_LOGE("_coretpk_installer_prepare_package_install(%s) failed. ret=[%d]", abs_path, ret);
+		_LOGE("_coretpk_installer_prepare_package_install(%s) failed. ret=[%d]", pkg_file, ret);
 	} else {
-		_LOGD("[%s] is installed successfully.", abs_path);
+		_LOGD("[%s] is installed successfully.", pkg_file);
 	}
 
 catch:
@@ -4017,13 +3938,10 @@ int __coretpk_installer_delta_apply_file(char *pkgid, char *file)
 	char to_file[BUF_SIZE] = { 0 };
 	char buf[BUF_SIZE] = { 0, };
 	int i = 0;
-	char *path = NULL;
-	char *p = NULL;
-	int idx = 0;
 
 	snprintf(delta_file, BUF_SIZE, "%s/%s%s/%s", OPT_USR_APPS, pkgid, DELTA_DIR, file);
 	snprintf(to_file, BUF_SIZE, "%s/%s%s/%s", OPT_USR_APPS, pkgid, NEW_DIR, file);
-	snprintf(from_file, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, file);
+	snprintf(from_file, BUF_SIZE, "%s/%s%s/%s", OPT_USR_APPS, pkgid, NEW_DIR, file);
 
 	/* Check whether old file is present or not */
 	if (access(from_file, F_OK) != 0) {
@@ -4036,30 +3954,6 @@ int __coretpk_installer_delta_apply_file(char *pkgid, char *file)
 		_LOGE("delta file [%s]is not present", delta_file);
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto catch;
-	}
-
-	if (access(to_file, F_OK) != 0) {
-		path = strdup(to_file);
-		tryvm_if(path == NULL, ret = -1, "out of memory");
-		p = strrchr(path, '/');
-		tryvm_if(p == NULL, ret = -1, "strrchr(%s) failed.", path);
-
-		p++;
-		idx = strlen(path) - strlen(p);
-		path[idx] = '\0';
-
-		/* make the parent dir */
-		if (access(path, F_OK) != 0) {
-			ret = _installer_util_mkpath(path, DIRECTORY_PERMISSION_755);
-			if (ret < 0) {
-				if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-					_LOGE("mkdir(%s) failed. [%d][%s]", path, errno, buf);
-				}
-				ret = RPM_INSTALLER_ERR_INTERNAL;
-				goto catch;
-			}
-			_LOGD("create directory=[%s]", path);
-		}
 	}
 
 	/* Check whether delta of file is present or not */
@@ -4079,14 +3973,11 @@ int __coretpk_installer_delta_apply_file(char *pkgid, char *file)
 	}
 	ret = _ri_xsystem(delta_argv);
 	if (ret != 0) {
-		if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-			_LOGE("failed to apply delta for file [%s] [Error = %s]", file, buf);
-		}
+		_LOGE("failed to apply delta for file =[%s], ret=[%d]", file, ret);
 		goto catch;
 	}
 
 catch:
-	FREE_AND_NULL(path);
 	return ret;
 }
 
@@ -4137,7 +4028,7 @@ int __coretpk_installer_delta_remove_file(char *pkgid, char *file)
 	char dest_file[BUF_SIZE] = { 0 };
 	struct stat stFileInfo = { 0 };
 
-	snprintf(dest_file, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, file);
+	snprintf(dest_file, BUF_SIZE, "%s/%s%s/%s", OPT_USR_APPS, pkgid, NEW_DIR, file);
 
 	if (access(dest_file, F_OK) == 0) {
 		if (lstat(dest_file, &stFileInfo) < 0) {
@@ -4246,8 +4137,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	char *pkgid = NULL;
 	int visibility = 0;
 	pkgmgrinfo_installed_storage storage;
-	bool is_remove_everything = false;
-	char signature1[BUF_SIZE] = { 0, };
 
 	pkgid = deltainfo->pkg_info->package_name;
 	if (!pkgid) {
@@ -4278,7 +4167,16 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto catch;
 	}
-
+	if ( storage == PMINFO_EXTERNAL_STORAGE ) {
+		/*move app to internal storage temporarily for applying delta patch*/
+		ret = __coretpk_installer_movepkg_for_delta_upgrade(pkgid, PM_MOVE_TO_INTERNAL);
+		if (ret !=0) {
+			_LOGE("__coretpk_installer_movepkg_for_delta_upgrade PM_MOVE_TO_INTERNAL failed!, ret = %d", ret);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto catch;
+		}
+	}
+	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "install_percent", "20");
 
 	_LOGD("------------------------------------------");
 	_LOGD("Delta package- Update - [%s][%s]", pkgid, pkg_file);
@@ -4286,19 +4184,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 
 	/* terminate running app */
 	__terminate_running_app(pkgid);
-
-
-	if ( storage == PMINFO_EXTERNAL_STORAGE ) {
-		/*move app to internal storage temporarily for applying delta patch*/
-		ret = __coretpk_installer_movepkg_for_delta_upgrade(pkgid, PM_MOVE_TO_INTERNAL);
-		if (ret !=0) {
-			_LOGE("__coretpk_installer_movepkg_for_delta_upgrade PM_MOVE_TO_INTERNAL failed!, ret = %d", ret);
-			ret = RPM_INSTALLER_ERR_INTERNAL;
-			is_remove_everything = true;
-			goto catch;
-		}
-	}
-	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "install_percent", "20");
 
 	/* creates directory for delta package */
 	snprintf(delta_pkg_path, BUF_SIZE, "%s/%s%s", OPT_USR_APPS, pkgid, DELTA_DIR);
@@ -4330,6 +4215,7 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 
 	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "install_percent", "30");
 
+	/* Copy the content of package to an intermediate directory */
 	snprintf(appdir, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
 	snprintf(new_appdir, BUF_SIZE, "%s/%s%s", OPT_USR_APPS, pkgid, NEW_DIR);
 
@@ -4338,6 +4224,8 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 		ret = RPM_INSTALLER_ERR_INTERNAL;
 		goto catch;
 	}
+
+	ret = _installer_util_copy_dir(appdir, new_appdir);
 
 	/* Apply the patches of modified files */
 	file_list = deltainfo->modify_files_list;
@@ -4353,7 +4241,20 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 		file_list = file_list->next;
 	}
 
-	/* Add new files */
+	/* Add new files and removed unwanted files */
+
+	file_list = deltainfo->remove_files_list;
+	while (file_list) {
+		file_path = (char *)file_list->data;
+		ret = __coretpk_installer_delta_remove_file(pkgid, file_path);
+		if (ret != 0) {
+			_LOGE("Removing file failed[%s]", file_path);
+			ret = RPM_INSTALLER_ERR_INTERNAL;
+			goto catch;
+		}
+		file_list = file_list->next;
+	}
+
 	file_list = deltainfo->add_files_list;
 	while (file_list) {
 		file_path = (char *)file_list->data;
@@ -4366,33 +4267,10 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 		file_list = file_list->next;
 	}
 
-	ret = _installer_util_copy_dir(new_appdir, appdir);
-	if (ret != 0) {
-		_LOGE("Removing file failed[%s]", file_path);
-		ret = RPM_INSTALLER_ERR_INTERNAL;
-		is_remove_everything = true;
-		goto catch;
-	}
-
-	/* Remove unwanted files */
-	file_list = deltainfo->remove_files_list;
-	while (file_list) {
-		file_path = (char *)file_list->data;
-		ret = __coretpk_installer_delta_remove_file(pkgid, file_path);
-		if (ret != 0) {
-			_LOGE("Removing file failed[%s]", file_path);
-			ret = RPM_INSTALLER_ERR_INTERNAL;
-			is_remove_everything = true;
-			goto catch;
-		}
-		file_list = file_list->next;
-	}
-
-	ret = _coretpk_installer_verify_signatures(appdir, pkgid, &visibility, NULL);
+	ret = _coretpk_installer_verify_signatures(new_appdir, pkgid, &visibility, NULL);
 	if (ret < 0) {
 		_LOGE("failed to verify signature and certificate, pkgid=[%s].", pkgid);
 		ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
-		is_remove_everything = true;
 		goto catch;
 	} else {
 		_LOGD("signature and certificate are verified successfully.");
@@ -4400,7 +4278,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 		if (ret < 0) {
 			_LOGE("@Failed to verify public key verifying[%s].", pkgid);
 			ret = RPM_INSTALLER_ERR_SIG_VERIFICATION_FAILED;
-			is_remove_everything = true;
 			goto catch;
 		}
 		_LOGD("#author public key verifying success");
@@ -4413,7 +4290,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	/* Check privilege and visibility */
 	ret = _coretpk_installer_verify_privilege_list(pkgid, deltainfo->pkg_info, visibility);
 	if (ret != 0) {
-		is_remove_everything = true;
 		goto catch;
 	}
 
@@ -4423,7 +4299,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	if (ret != 0) {
 		_LOGE("_coretpk_parser_convert_manifest(%s) failed.", pkgid);
 		ret = RPM_INSTALLER_ERR_NO_MANIFEST;
-		is_remove_everything = true;
 		goto catch;
 	}
 
@@ -4431,7 +4306,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	if (ret < 0) {
 		_LOGE("invalid manifest file(schema)");
 		ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
-		is_remove_everything = true;
 		goto catch;
 	}
 
@@ -4439,7 +4313,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	if (ret < 0) {
 		_LOGE("failed to parse the manifest.");
 		ret = RPM_INSTALLER_ERR_INTERNAL;
-		is_remove_everything = true;
 		goto catch;
 	}
 	_ri_unregister_cert(pkgid);
@@ -4451,13 +4324,21 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	/* register cert info */
 	_ri_register_cert(pkgid);
 
+	/* delete app's old */
+	if (access(appdir, F_OK) == 0)
+		_installer_util_delete_dir(appdir);
+
+	ret = rename(new_appdir, appdir);
+	if (ret != 0) {
+		_LOGE("renaming failed src[%s], dest[%s]", new_appdir, appdir);
+		goto catch;
+	}
 	_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "install_percent", "80");
 
 	/* make directory */
 	ret = _coretpk_installer_make_directory(pkgid, false);
 	if (ret != 0) {
 		_LOGE("failed to make the directory.");
-		is_remove_everything = true;
 		goto catch;
 	}
 
@@ -4465,7 +4346,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 	ret = _coretpk_installer_apply_smack(pkgid, 1);
 	if (ret != 0) {
 		_LOGE("failed to apply the smack.");
-		is_remove_everything = true;
 		goto catch;
 	}
 
@@ -4482,7 +4362,6 @@ int __coretpk_installer_install_delta(const char *pkg_file, delta_info * deltain
 		if (ret !=0) {
 			_LOGE("__coretpk_installer_movepkg_for_delta_upgrade  PM_MOVE_TO_SDCARD failed!, ret = %d", ret);
 			ret = RPM_INSTALLER_ERR_INTERNAL;
-			is_remove_everything = true;
 			goto catch;
 		}
 	}
@@ -4495,39 +4374,7 @@ catch:
 	if (ret == RPM_INSTALLER_SUCCESS) {
 		_LOGD("[#]end : _coretpk_installer_install_delta");
 		_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "end", "ok");
-
-		// signature1.xml
-		snprintf(signature1, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, SIGNATURE1_XML);
-		if (access(signature1, F_OK) == 0) {
-			_LOGD("signature1 file is deleted. [%s]", signature1);
-			(void)remove(signature1);
-		}
 	} else {
-
-		/*TODO:need to add recovery logic*/
-
-		if(is_remove_everything) {
-			/* remove db info */
-			_coretpk_installer_remove_db_info(pkgid);
-
-			/* remove xml */
-			if (access(system_manifest, F_OK) == 0) {
-				(void)remove(system_manifest);
-			}
-
-			/* remove app dir(root_path) */
-			if (__is_dir(appdir)) {
-				_installer_util_delete_dir(appdir);
-			}
-
-			/* remove ext app dir(/opt/storage/sdcard/apps/pkgid) */
-			char extpath[BUF_SIZE] = { '\0' };
-			snprintf(extpath, BUF_SIZE, "%s/%s", OPT_STORAGE_SDCARD_APP_ROOT, pkgid);
-			if (__is_dir(extpath)) {
-				_installer_util_delete_dir(extpath);
-			}
-		}
-
 		char *errorstr = NULL;
 		_ri_error_no_to_string(ret, &errorstr);
 		_ri_broadcast_status_notification(pkgid, PKGTYPE_TPK, "error", errorstr);
@@ -4983,7 +4830,7 @@ int _coretpk_installer_package_reinstall(const char *pkgid, const char *clientid
 		snprintf(manifest, BUF_SIZE, "%s/%s", dirpath, CORETPK_XML);
 
 		/*compare package's api version with platform version*/
-		pkg_file_info = _coretpk_parser_get_manifest_info(manifest);
+		pkg_file_info = _coretpk_installer_get_pkgfile_info(manifest, NULL);
 		if (pkg_file_info == NULL) {
 			_LOGE("failed to get pkginfo from manifest[%s]", manifest);
 			ret = RPM_INSTALLER_ERR_INTERNAL;
@@ -5108,13 +4955,69 @@ err:
 	return ret;
 }
 
-int __coretpk_installer_csc_install(const char *path_str, const char *remove_str, const char *csc_script)
+
+int __check_installed_package(pkginfo *info)
+{
+	int ret = 0;
+	pkginfo *dbinfo = NULL;
+	char *pkgid = info->package_name;
+
+	dbinfo = _rpm_installer_get_pkgname_info(pkgid);
+	/* install case */
+	if (dbinfo == NULL) {
+		_LOGD("[##]csc-core : no existing version. csc install case.");
+		return 0;
+	}
+
+	ret = _installer_util_compare_version(dbinfo->version, info->version);
+	if (ret < VERSION_NEW) {
+		/* csc version is not updated so keep existing version */
+		_LOGD("[##]csc-core : csc version is not updated. keep existing version.");
+		if (dbinfo) {
+			free(dbinfo);
+			dbinfo = NULL;
+		}
+		return -1;
+	}
+
+	/* upgrade case */
+	_LOGD("[##]csc-core : csc version is updated. csc upgrade case.");
+	/* remove for clean */
+	__ri_remove_updated_dir(pkgid);
+
+	/* unregister cert info */
+	_ri_unregister_cert(pkgid);
+
+	ret = _ri_privilege_unregister_package(pkgid);
+	if (ret < 0) {
+		_LOGE("[##]csc-core : _ri_privilege_unregister_package fail[pkgid=%s].", pkgid);
+	}
+
+	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
+	if (ret < 0) {
+		_LOGE("[##]csc-core : parse uninstall fail[manifest=%s].", pkgid);
+	}
+
+	ret = _ri_smack_reload(pkgid, UNINSTALL_REQ);
+	if (ret != 0) {
+		_LOGE("[##]csc-core : _ri_smack_reload failed[pkgid=%s].", pkgid);
+	}
+
+	if (dbinfo) {
+		free(dbinfo);
+		dbinfo = NULL;
+	}
+
+	return 0;
+}
+
+int _coretpk_installer_csc_install(const char *path_str, const char *remove_str, const char *csc_script)
 {
 	retvm_if(path_str == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "path_str is NULL.");
 	retvm_if(remove_str == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "remove_str is NULL.");
 	retvm_if(csc_script == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "csc_script is NULL.");
 
-	/* ex) rpm-backend -c path=/tmp/org.tizen.corebasicapp2-1.0.0-arm.tpk:op=install:removable=true */
+	/* ex) rpm-backend -k csc-core -s path=/tmp/org.tizen.corebasicapp2-1.0.0-arm.tpk:op=install:removable=true */
 
 	int ret = 0;
 	pkginfo *info = NULL;
@@ -5128,7 +5031,8 @@ int __coretpk_installer_csc_install(const char *path_str, const char *remove_str
 	int visibility = 0;
 	bundle *optional_data = NULL;
 	char buf[BUF_SIZE] = { 0, };
-	bool is_update = false;
+
+	_LOGD("[##]csc-core : start csc_install[path=%s]", path_str);
 
 	info = _coretpk_installer_get_pkgfile_info(path_str, CORETPK_CSC_CMD);
 	if (info == NULL || (strlen(info->package_name) == 0)) {
@@ -5137,27 +5041,23 @@ int __coretpk_installer_csc_install(const char *path_str, const char *remove_str
 		goto err;
 	}
 
+	_LOGD("[##]csc-core : get pkgid [%s]", info->package_name);
+
 	dbinfo = _rpm_installer_get_pkgname_info(info->package_name);
 	if (dbinfo != NULL) {
 		_LOGE("csc_upgrade case!");
+		free(info);
+		free(dbinfo);
 
-		ret = _installer_util_compare_version(dbinfo->version, info->version);
-		if (ret < VERSION_NEW) {
-			/* csc version is not update. */
-			_LOGD("[##]csc-core : do not update. csc version is not updated.");
-			ret = RPM_INSTALLER_SUCCESS;
-			goto err;
-		}
-
-		is_update = true;
+		return _coretpk_installer_csc_upgrade(path_str, remove_str, csc_script);
 	} else {
 		snprintf(flag_path, BUF_SIZE, "%s/%s", CSC_FLAG, info->package_name);
 		if (access(flag_path, F_OK) == 0) {
 			_LOGD("csc install >> user uninstall case [%s]", info->package_name);
 			_LOGD("keep the status. So need not install csc.");
 
-			ret = RPM_INSTALLER_SUCCESS;
-			goto err;
+			free(info);
+			return 0;
 		} else {
 			_LOGD("first csc install case [%s]", info->package_name);
 		}
@@ -5168,16 +5068,17 @@ int __coretpk_installer_csc_install(const char *path_str, const char *remove_str
 		bundle_add_str(optional_data, "csc_path", csc_script);
 	}
 
-	snprintf(buff, BUF_SIZE, "%s/%s/", OPT_USR_APPS, info->package_name);
+	ret = __check_installed_package(info);
+	if (ret < 0) {
+		_LOGE("do not install or upgrade. keep exsiting version.");
+		ret = 0;
+		goto err;
+	}
 
-	if (is_update == false) {
-		/* If the directory which will be installed exists, remove it. */
-		if (__is_dir(buff)) {
-			_installer_util_delete_dir(buff);
-		}
-	} else {
-		/* remove dir for clean */
-		__ri_remove_updated_dir(info->package_name);
+	/* If the directory which will be installed exists, remove it. */
+	snprintf(buff, BUF_SIZE, "%s/%s/", OPT_USR_APPS, info->package_name);
+	if (__is_dir(buff)) {
+		_installer_util_delete_dir(buff);
 	}
 
 	_LOGD("[##]csc-core : real path [%s]", buff);
@@ -5265,25 +5166,12 @@ int __coretpk_installer_csc_install(const char *path_str, const char *remove_str
 	csc_tags[1] = "preload=true";
 	csc_tags[2] = NULL;
 
-	/* call parser api */
-	if (is_update == false) {
-		ret = pkgmgr_parser_parse_manifest_for_installation(manifest, csc_tags);
-		if (ret < 0) {
-			_LOGD("fota-info : failed to parse the manifest[%s].", manifest);
-		}
-	} else {
-		ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, NULL);
-		if (ret < 0) {
-			_LOGD("fota-info : failed to parse the manifest[%s].", manifest);
-		}
-
-		/* clean cert */
-		_ri_unregister_cert(info->package_name);
-		_ri_privilege_unregister_package(info->package_name);
+	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, csc_tags);
+	if (ret < 0) {
+		_LOGE("pkgmgr_parser_parse_manifest_for_installation(%s) failed.", manifest);
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
 	}
-
-	/* search_ug_app */
-	_coretpk_installer_search_ui_gadget(info->package_name);
 
 	_LOGD("[##]csc-core : register manifest success");
 
@@ -5343,6 +5231,219 @@ err:
 		info = NULL;
 	}
 
+	if (optional_data) {
+		bundle_free(optional_data);
+	}
+
+	return ret;
+}
+
+int _coretpk_installer_csc_upgrade(const char *path_str, const char *remove_str, const char *csc_script)
+{
+	retvm_if(path_str == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "path_str is NULL.");
+	retvm_if(remove_str == NULL, RPM_INSTALLER_ERR_WRONG_PARAM, "remove_str is NULL.");
+
+	int ret = 0;
+	pkginfo *info = NULL;
+	pkginfo *dbinfo = NULL;
+	char buff[BUF_SIZE] = { '\0' };
+	char manifest[BUF_SIZE] = { '\0' };
+	char cwd[BUF_SIZE] = { '\0' };
+	char *temp = NULL;
+	char *csc_tags[3] = { NULL, };
+	int visibility = 0;
+	char *pkgid = NULL;
+	bundle *optional_data = NULL;
+	char buf[BUF_SIZE] = { 0, };
+
+	_LOGD("[##]csc-core : start csc_upgrade[path=%s]", path_str);
+
+	optional_data = bundle_create();
+	if (optional_data) {
+		bundle_add_str(optional_data, "csc_path", csc_script);
+	}
+
+	info = _coretpk_installer_get_pkgfile_info(path_str, CORETPK_CSC_CMD);
+	if (info == NULL || (strlen(info->package_name) == 0)) {
+		_LOGE("_coretpk_installer_get_pkgfile_info(%s) failed.", path_str);
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+
+	pkgid = info->package_name;
+
+	_LOGD("[##]csc-core : get pkgid [%s]", pkgid);
+
+	dbinfo = _rpm_installer_get_pkgname_info(info->package_name);
+	if (dbinfo == NULL) {
+		_LOGE("_rpm_installer_get_pkgname_info(%s) failed.", info->package_name);
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+
+	if (strcmp(info->version, dbinfo->version) <= 0) {
+		/* csc version is not update. */
+		_LOGD("[##]csc-core : do not update. csc version is not updated.");
+		ret = RPM_INSTALLER_SUCCESS;
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : compare version is done. version is updated.");
+
+	/* remove dir for clean */
+	__ri_remove_updated_dir(pkgid);
+
+	snprintf(buff, BUF_SIZE, "%s/%s/", OPT_USR_APPS, pkgid);
+	const char *unzip_argv[] = { "/usr/bin/unzip", "-oqq", path_str, "-d", buff, NULL };
+	ret = _ri_xsystem(unzip_argv);
+	if (ret != 0) {
+		_LOGE("failed to unzip for [%s, %d].", buff, ret);
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : unzip success[%s]", buff);
+
+	/* getcwd */
+	temp = getcwd(cwd, BUF_SIZE);
+	if ((temp == NULL) || (cwd[0] == '\0')) {
+		if( strerror_r(errno, buf, sizeof(buf)) == 0) {
+			_LOGE("getcwd() failed. [%d][%s]", errno, buf);
+		}
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+	_LOGD("#Current working directory is %s.", cwd);
+
+	/* change dir */
+	ret = chdir(buff);
+	if (ret != 0) {
+		if( strerror_r(errno, buf, sizeof(buf)) == 0) {
+			_LOGE("chdir(%s) failed. [%d][%s]", buff, errno, buf);
+		}
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+
+	/* check for signature and certificate */
+	ret = _coretpk_installer_verify_signatures(buff, pkgid, &visibility, NULL);
+	if (ret != 0) {
+		_LOGE("_coretpk_installer_verify_signatures(%s, %s) failed.", buff, pkgid);
+		goto err;
+	}
+	_LOGD("#signature and certificate verifying success");
+
+	/* chdir */
+	ret = chdir(cwd);
+	if (ret != 0) {
+		if( strerror_r(errno, buf, sizeof(buf)) == 0) {
+			_LOGE("chdir(%s) failed. [%d][%s]", cwd, errno, buf);
+		}
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+
+	/* convert manifest and copy the file to /opt/share/packages */
+	snprintf(manifest, BUF_SIZE, "%s/%s/%s", OPT_USR_APPS, pkgid, CORETPK_XML);
+	ret = _coretpk_parser_convert_manifest(manifest, pkgid, NULL, false, visibility, optional_data);
+	if (ret != 0) {
+		_LOGE("_coretpk_parser_convert_manifest(%s, %s) failed.", manifest, pkgid);
+		ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : manifest converting success");
+
+	/* check the manifest file. */
+	memset(manifest, '\0', sizeof(manifest));
+	snprintf(manifest, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
+	/* compare manifest.xml with schema file(/usr/etc/package-manager/preload/manifest.xsd) */
+	ret = pkgmgr_parser_check_manifest_validation(manifest);
+	if (ret < 0) {
+		_LOGE("pkgmgr_parser_check_manifest_validation(%s) failed.", manifest);
+		ret = RPM_INSTALLER_ERR_INVALID_MANIFEST;
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : manifest validation success");
+
+	/* set csc tag. */
+	if (strcmp(remove_str, "true") == 0)
+		csc_tags[0] = "removable=true";
+	else
+		csc_tags[0] = "removable=false";
+
+	csc_tags[1] = "preload=true";
+	csc_tags[2] = NULL;
+
+	/* remove exist csc dbinfo */
+	ret = pkgmgr_parser_parse_manifest_for_uninstallation(manifest, NULL);
+	if (ret < 0) {
+		_LOGE("pkgmgr_parser_parse_manifest_for_uninstallation(%s) failed.", manifest);
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+
+	/* insert new csc info */
+	ret = pkgmgr_parser_parse_manifest_for_installation(manifest, csc_tags);
+	if (ret < 0) {
+		_LOGE("pkgmgr_parser_parse_manifest_for_installation(%s) failed.", manifest);
+		ret = RPM_INSTALLER_ERR_INTERNAL;
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : register manifest success");
+
+	/* search_ug_app */
+	_coretpk_installer_search_ui_gadget(pkgid);
+
+	/* unregister cert info */
+	_ri_unregister_cert(pkgid);
+
+	/* register cert info */
+	_ri_register_cert(pkgid);
+
+	/* make directory */
+	ret = _coretpk_installer_make_directory(pkgid, false);
+	if (ret != 0) {
+		_LOGE("_coretpk_installer_make_directory(%s) failed.", pkgid);
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : make directory success");
+
+	/* Remove origin rule */
+	_ri_privilege_unregister_package(pkgid);
+
+	/* apply smack to app dir */
+	ret = _coretpk_installer_apply_smack(pkgid, 1);
+	if (ret != 0) {
+		_LOGE("_coretpk_installer_apply_smack(%s) failed.", pkgid);
+		goto err;
+	}
+
+	_LOGD("[##]csc-core : apply_smack success");
+
+	/* apply smack by privilege */
+	ret = _ri_apply_privilege(pkgid, visibility, NULL);
+	if (ret != 0) {
+		_LOGE("_ri_apply_privilege(%s) failed. ret=[%d]", pkgid, ret);
+	}
+
+	_LOGD("[##]csc-core : apply_privilege success");
+
+	ret = RPM_INSTALLER_SUCCESS;
+err:
+	if (ret == 0) {
+		_LOGD("[##]csc-core : update csc core success");
+	} else {
+		_LOGD("[##]csc-core : update csc core fail");
+	}
+
+	if (info) {
+		_installer_util_free_pkg_info(info);
+		info = NULL;
+	}
+
 	if (dbinfo) {
 		free(dbinfo);
 		dbinfo = NULL;
@@ -5355,9 +5456,9 @@ err:
 	return ret;
 }
 
-int __coretpk_installer_csc_uninstall(const char *pkgid)
+int _coretpk_installer_csc_uninstall(const char *pkgid)
 {
-	/* ex) rpm-backend -c path=org.tizen.corebasicapp:op=uninstall:removable=true */
+	/* ex) rpm-backend -k csc-core -s path=org.tizen.corebasicapp:op=uninstall:removable=true */
 
 	int ret = 0;
 	char flag_path[BUF_SIZE] = { 0, };
@@ -5372,314 +5473,6 @@ int __coretpk_installer_csc_uninstall(const char *pkgid)
 	} else {
 		_LOGD("flag_path is not existed. [%s]", flag_path);
 	}
-
-	return ret;
-}
-
-int _coretpk_installer_prepare_csc(const char *csc_script)
-{
-	int ret = 0;
-	int op_type = 0;
-
-	char *path_str = NULL;
-	char *op_str = NULL;
-	char *remove_str = NULL;
-	char csc_str[BUF_SIZE] = { '\0' };
-	snprintf(csc_str, BUF_SIZE - 1, "%s:", csc_script);
-
-	/* get params from csc script */
-	path_str = _installer_util_get_str(csc_str, TOKEN_PATH_STR);
-	op_str = _installer_util_get_str(csc_str, TOKEN_OPERATION_STR);
-	remove_str = _installer_util_get_str(csc_str, TOKEN_REMOVE_STR);
-	if ((path_str == NULL) || (op_str == NULL) || (remove_str == NULL)) {
-		_LOGE("csc-info : input param is null[%s, %s, %s]\n", path_str, op_str, remove_str);
-		goto end;
-	}
-
-	/* get operation type */
-	if (strcmp(op_str, "install") == 0) {
-		op_type = INSTALL_REQ;
-	} else if (strcmp(op_str, "update") == 0) {
-		op_type = UPGRADE_REQ;
-	} else if (strcmp(op_str, "uninstall") == 0) {
-		op_type = UNINSTALL_REQ;
-	} else {
-		_LOGE("csc-info : operation error[%s]\n", op_str);
-		goto end;
-	}
-
-	switch (op_type) {
-	case INSTALL_REQ:
-		ret = __coretpk_installer_csc_install(path_str, remove_str, csc_script);
-		break;
-
-	case UPGRADE_REQ:
-		ret = __coretpk_installer_csc_install(path_str, remove_str, csc_script);
-		break;
-
-	case UNINSTALL_REQ:
-		ret = __coretpk_installer_csc_uninstall(path_str);
-		break;
-	}
-
-	if (ret < 0)
-		_LOGE("csc-info : csc fail [pkgid=%s, operation=%d]\n", path_str, op_type);
-
-end:
-	if (path_str)
-		free(path_str);
-	if (op_str)
-		free(op_str);
-	if (remove_str)
-		free(remove_str);
-
-	return ret;
-}
-
-
-static int __coretpk_installer_fota_install(const char *pkgid, bool is_update, bool is_opt_pkg)
-{
-	int ret = 0;
-	int visibility = 0;
-	char manifest[BUF_SIZE] = { 0, };
-	char root_path[BUF_SIZE] = { 0, };
-	char signature[BUF_SIZE] = { 0, };
-
-	char *usr_fota_argv[] = { "fota=true", NULL };
-	char *opt_fota_argv[3] = { NULL, };
-	opt_fota_argv[0] = "removable=true";
-	opt_fota_argv[1] = "preload=true";
-	opt_fota_argv[2] = NULL;
-
-	_LOGD("fota-info : pkgid[%s], is_opt_pkg[%d] fota start.", pkgid, is_opt_pkg);
-
-	/* clean directory and file */
-	if (is_update == true) {
-		_LOGD("fota-info : package is updated.");
-
-		__ri_remove_updated_dir(pkgid);
-		snprintf(manifest, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
-		(void)remove(manifest);
-		memset(manifest, '\0', BUF_SIZE);
-	}
-
-	/* unzip pkg path from factoryrest data */
-	if (is_opt_pkg == true) {
-		snprintf(root_path, BUF_SIZE, "opt/usr/apps/%s/*", pkgid); // relative path
-		const char *pkg_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, root_path, "-d", "/", NULL };
-		ret = _ri_xsystem(pkg_argv);
-		if (ret != 0) {
-			_LOGE("fota-info : fail to unzip [root path = %s, ret = %d].\n", root_path, ret);
-		} else {
-			_LOGE("fota-info : success to unzip [root path = %s].\n", root_path);
-		}
-
-		memset(root_path, '\0', BUF_SIZE);
-		snprintf(root_path, BUF_SIZE, "opt/share/packages/%s.xml", pkgid); // relative path
-		const char *xml_argv[] = { "/usr/bin/unzip", "-oX", OPT_ZIP_FILE, root_path, "-d", "/", NULL };
-		ret = _ri_xsystem(xml_argv);
-		if (ret != 0) {
-			_LOGE("fota-info : fail to unzip [xml path = %s, ret = %d].\n", root_path, ret);
-		} else {
-			_LOGE("fota-info : success to unzip [xml path = %s].\n", root_path);
-		}
-	}
-
-	/* get  SHARE_PACKAGES file */
-	if (is_opt_pkg == true) {
-		snprintf(manifest, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
-	} else {
-		snprintf(manifest, BUF_SIZE, "%s/%s.xml", USR_SHARE_PACKAGES, pkgid);
-	}
-
-	/* access  SHARE_PACKAGES file */
-	if (access(manifest, F_OK) == 0) {
-		_LOGD("fota-info : success to access manefest[%s].", manifest);
-	} else {
-		_LOGD("fota-info : fail to access manefest[%s].", manifest);
-	}
-
-	/* call parser api */
-	if (is_update == false) {
-		ret = pkgmgr_parser_parse_manifest_for_installation(manifest, usr_fota_argv);
-		if (ret < 0) {
-			_LOGD("fota-info : failed to parse the manifest[%s].", manifest);
-		}
-	} else {
-		ret = pkgmgr_parser_parse_manifest_for_upgrade(manifest, opt_fota_argv);
-		if (ret < 0) {
-			_LOGD("fota-info : failed to parse the manifest[%s].", manifest);
-		}
-
-		/* clean cert */
-		_ri_unregister_cert(pkgid);
-		_ri_privilege_unregister_package(pkgid);
-	}
-
-	_LOGD("fota-info : success to parse the manifest.");
-
-	/* search_ug_app */
-	_coretpk_installer_search_ui_gadget(pkgid);
-
-	/* get  root path */
-	memset(root_path, '\0', BUF_SIZE);
-	if (is_opt_pkg == true) {
-		snprintf(root_path, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
-	} else {
-		snprintf(root_path, BUF_SIZE, "%s/%s", USR_APPS, pkgid);
-	}
-
-	/* change  root path */
-	ret = chdir(root_path);
-	if (ret != 0) {
-		char buf[BUF_SIZE] = { 0, };
-		if( strerror_r(errno, buf, sizeof(buf)) == 0) {
-			_LOGE("fota-info : chdir(%s) failed. [%s]", root_path, buf);
-		}
-	}
-
-	/* verify signature */
-	snprintf(signature, BUF_SIZE, "%s/signature1.xml", root_path);
-	ret = _ri_verify_sig_and_cert(signature, &visibility, false, NULL);
-	if (ret == 0) {
-		_LOGD("fota-info : success to verify signature1 .");
-	} else {
-		_LOGD("fota-info : fail to verify signature1 [ret = %d].", ret);
-	}
-
-	/* verify author */
-	memset(signature, '\0', BUF_SIZE);
-	snprintf(signature, BUF_SIZE, "%s/author-signature.xml", root_path);
-	ret = _ri_verify_sig_and_cert(signature, &visibility, false, NULL);
-	if (ret == 0) {
-		_LOGD("fota-info : success to verify author-signature [visibility = %d].", visibility);
-		_ri_register_cert(pkgid);
-	} else {
-		_LOGD("fota-info : fail to verify author-signature [visibility = %d, ret = %d].", visibility, ret);
-	}
-
-	/* make pkg directory */
-	ret = _coretpk_installer_make_directory(pkgid, true);
-	if (ret != 0) {
-		_LOGE("fota-info : fail to make_directory [pkgid = %s, ret = %d]\n", pkgid, ret);
-	} else {
-		_LOGD("fota-info : success to _make_directory.");
-	}
-
-	/* apply smack to pkg dir */
-	ret = _coretpk_installer_apply_smack(pkgid, 1);
-	if (ret != 0) {
-		_LOGE("fota-info : fail to apply_smack [pkgid = %s, ret = %d]\n", pkgid, ret);
-	} else {
-		_LOGD("fota-info : success to apply_smack.");
-	}
-
-	/* apply privilege to pkg dir */
-	ret = _ri_apply_privilege(pkgid, visibility, NULL);
-	if (ret < 0) {
-		_LOGE("fota-info : fail to apply_privilege [pkgid = %s, ret = %d]\n", pkgid, ret);
-	} else {
-		_LOGD("fota-info : success to apply_privilege.");
-	}
-
-	_LOGD("fota-info : pkgid[%s] fota finish[ret = %d].", pkgid, ret);
-
-	return ret;
-}
-
-static int __coretpk_installer_fota_uninstall(char *pkgid)
-{
-	_LOGD("fota-info : pkgid[%s] start uninstallation\n", pkgid);
-
-	int ret = 0;
-	char pkgpath[BUF_SIZE] = { '\0' };
-
-	/* del root path dir */
-	snprintf(pkgpath, BUF_SIZE, "%s/%s", OPT_USR_APPS, pkgid);
-	_installer_util_delete_dir(pkgpath);
-
-	memset(pkgpath, '\0', BUF_SIZE);
-	snprintf(pkgpath, BUF_SIZE, "%s/%s.xml", OPT_SHARE_PACKAGES, pkgid);
-	(void)remove(pkgpath);
-
-	/* del root path dir for ext */
-	memset(pkgpath, '\0', BUF_SIZE);
-	snprintf(pkgpath, BUF_SIZE, "%s/%s", OPT_STORAGE_SDCARD_APP_ROOT, pkgid);
-	if (__is_dir(pkgpath)) {
-		_installer_util_delete_dir(pkgpath);
-	}
-
-	/* Unregister cert info */
-	_ri_unregister_cert(pkgid);
-
-	ret = _ri_privilege_unregister_package(pkgid);
-	if (ret < 0) {
-		_LOGE("fota-info : _ri_privilege_unregister_package fail[smack_label=%s]\n", pkgid);
-	}
-
-	ret = pkgmgr_parser_parse_manifest_for_uninstallation(pkgid, NULL);
-	if (ret < 0) {
-		_LOGE("fota-info : uninstall fail[pkgid=%s]\n", pkgid);
-	}
-
-	_LOGD("fota-info : pkgid[%s] uninstall success\n", pkgid);
-
-	return ret;
-}
-
-int _coretpk_installer_prepare_fota(char *fota_script, bool is_opt_pkg)
-{
-	int ret = 0;
-	int op_type = 0;
-	char *pkgid = NULL;
-	char *op_str = NULL;
-
-	char csc_str[BUF_SIZE] = { '\0' };
-	snprintf(csc_str, BUF_SIZE - 1, "%s:", fota_script);
-
-	/* get params from fota script */
-	pkgid = _installer_util_get_str(csc_str, TOKEN_PATH_STR);
-	op_str = _installer_util_get_str(csc_str, TOKEN_OPERATION_STR);
-	if ((pkgid == NULL) || (op_str == NULL)) {
-		_LOGE("fota-info : input param is null[%s, %s]\n", pkgid, op_str);
-		goto end;
-	}
-	_LOGD("fota-info : path=%s, op=%s\n", pkgid, op_str);
-
-	/* get operation type */
-	if (strcmp(op_str, "install") == 0) {
-		op_type = INSTALL_REQ;
-	} else if (strcmp(op_str, "update") == 0) {
-		op_type = UPGRADE_REQ;
-	} else if (strcmp(op_str, "uninstall") == 0) {
-		op_type = UNINSTALL_REQ;
-	} else {
-		_LOGE("fota-info : operation error[%s, %s]\n", pkgid, op_str);
-		goto end;
-	}
-
-	switch (op_type) {
-	case INSTALL_REQ:
-		ret = __coretpk_installer_fota_install(pkgid, false, is_opt_pkg);
-		break;
-
-	case UPGRADE_REQ:
-		ret = __coretpk_installer_fota_install(pkgid, true, is_opt_pkg);
-		break;
-
-	case UNINSTALL_REQ:
-		ret = __coretpk_installer_fota_uninstall(pkgid);
-		break;
-	}
-
-	if (ret < 0)
-		_LOGE("fota-info : Fota fail [pkgid=%s, operation=%d]\n", pkgid, op_type);
-
-end:
-	if (pkgid)
-		free(pkgid);
-	if (op_str)
-		free(op_str);
 
 	return ret;
 }
