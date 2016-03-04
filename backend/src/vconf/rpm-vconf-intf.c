@@ -161,6 +161,17 @@ void _ri_save_last_input_info(char *pkgid, int reqcommand, int options)
 		_LOGE("vconf_keylist_free FAIL\n");
 }
 
+void _ri_broadcast_privilege_notification(const char *pkgid, const char *pkgtype, const char *key, const char *val)
+{
+	int ret_val = 0;
+
+	if (broadcast_disable || pi == NULL || val == NULL)
+		return;
+
+	_LOGE("pkgid=[%s], key[%s], val=[%s]", pkgid, key, val);
+	pkgmgr_installer_send_signal(pi, pkgtype, pkgid, key, val);
+}
+
 void _ri_broadcast_status_notification(const char *pkgid, char *pkg_type, char *key, char *val)
 {
 	const char *pkgid_tmp = pkgid;
